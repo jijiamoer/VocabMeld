@@ -172,11 +172,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // 获取缓存统计
   if (message.action === 'getCacheStats') {
-    chrome.storage.local.get('vocabmeld_word_cache', (result) => {
-      const cache = result.vocabmeld_word_cache || [];
-      sendResponse({
-        size: cache.length,
-        maxSize: 2000
+    chrome.storage.sync.get('cacheMaxSize', (syncResult) => {
+      const maxSize = syncResult.cacheMaxSize || 2000;
+      chrome.storage.local.get('vocabmeld_word_cache', (result) => {
+        const cache = result.vocabmeld_word_cache || [];
+        sendResponse({
+          size: cache.length,
+          maxSize: maxSize
+        });
       });
     });
     return true;

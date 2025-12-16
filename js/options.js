@@ -55,6 +55,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     autoProcess: document.getElementById('autoProcess'),
     showPhonetic: document.getElementById('showPhonetic'),
     showAddMemorize: document.getElementById('showAddMemorize'),
+    cacheMaxSizeRadios: document.querySelectorAll('input[name="cacheMaxSize"]'),
     translationStyleRadios: document.querySelectorAll('input[name="translationStyle"]'),
     themeRadios: document.querySelectorAll('input[name="theme"]'),
     ttsVoice: document.getElementById('ttsVoice'),
@@ -370,6 +371,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.showPhonetic.checked = result.showPhonetic ?? true;
       elements.showAddMemorize.checked = result.showAddMemorize ?? true;
       
+      const cacheMaxSize = result.cacheMaxSize || 2000;
+      elements.cacheMaxSizeRadios.forEach(radio => {
+        radio.checked = parseInt(radio.value) === cacheMaxSize;
+      });
+      
       const translationStyle = result.translationStyle || 'translation-original';
       elements.translationStyleRadios.forEach(radio => {
         radio.checked = radio.value === translationStyle;
@@ -618,8 +624,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     chrome.storage.local.get('vocabmeld_word_cache', (data) => {
       const cacheSize = (data.vocabmeld_word_cache || []).length;
-      elements.statCacheSize.textContent = cacheSize;
-      elements.cacheProgress.style.width = (cacheSize / 2000 * 100) + '%';
+      const checkedRadio = document.querySelector('input[name="cacheMaxSize"]:checked');
+      const maxSize = checkedRadio ? parseInt(checkedRadio.value) : 2000;
+      elements.statCacheSize.textContent = `${cacheSize}/${maxSize}`;
+      elements.cacheProgress.style.width = (cacheSize / maxSize * 100) + '%';
     });
   }
 
@@ -637,6 +645,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       autoProcess: elements.autoProcess.checked,
       showPhonetic: elements.showPhonetic.checked,
       showAddMemorize: elements.showAddMemorize.checked,
+      cacheMaxSize: parseInt(document.querySelector('input[name="cacheMaxSize"]:checked').value),
       translationStyle: document.querySelector('input[name="translationStyle"]:checked').value,
       ttsVoice: elements.ttsVoice.value,
       ttsRate: parseFloat(elements.ttsRate.value),
@@ -668,6 +677,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 下拉框 - 改变时保存
     elements.nativeLanguage.addEventListener('change', () => debouncedSave(200));
+    
+    // 缓存上限 - 改变时保存
+    elements.cacheMaxSizeRadios.forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
     
     // 学习语言改变时，重新加载声音列表
     elements.targetLanguage.addEventListener('change', () => {

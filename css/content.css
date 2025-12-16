@@ -59,7 +59,7 @@
 /* 暗色主题适配 */
 @media (prefers-color-scheme: dark) {
   .vocabmeld-translated {
-    border-bottom-color: #818cf8 !important;
+    border-bottom-color: rgba(129, 140, 248, 0.6) !important;
   }
   
   .vocabmeld-translated:hover {
@@ -113,7 +113,7 @@
   line-height: inherit !important;
   vertical-align: baseline !important;
   text-decoration: none !important;
-  border-bottom: 2px solid #6366f1 !important;
+  border-bottom: 1.5px solid rgba(99, 102, 241, 0.6) !important;
   margin-left: 0.15em !important;
   margin-right: 0.15em !important;
 }

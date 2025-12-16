@@ -17,7 +17,7 @@
   };
   const SKIP_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'CODE', 'PRE', 'KBD', 'TEXTAREA', 'INPUT', 'SELECT', 'BUTTON'];
   const SKIP_CLASSES = ['vocabmeld-translated', 'vocabmeld-tooltip', 'hljs', 'code', 'syntax'];
-  const CACHE_MAX_SIZE = 2000;
+  const DEFAULT_CACHE_MAX_SIZE = 2000;
 
   // ============ 状态管理 ============
   let config = null;
@@ -126,6 +126,7 @@
           autoProcess: result.autoProcess ?? false,
           showPhonetic: result.showPhonetic ?? true,
           showAddMemorize: result.showAddMemorize ?? true,
+          cacheMaxSize: result.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE,
           translationStyle: result.translationStyle || 'translation-original',
           theme: result.theme || 'dark',
           enabled: result.enabled ?? true,
@@ -774,7 +775,7 @@ ${filteredText}
           }
           
           // 如果达到上限，删除最早的项
-          while (wordCache.size >= CACHE_MAX_SIZE) {
+          while (wordCache.size >= (config?.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE)) {
             const firstKey = wordCache.keys().next().value;
             wordCache.delete(firstKey);
           }
@@ -958,7 +959,7 @@ ${uncached.join(', ')}
           }
           
           // 如果达到上限，删除最早的项
-          while (wordCache.size >= CACHE_MAX_SIZE) {
+          while (wordCache.size >= (config?.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE)) {
             const firstKey = wordCache.keys().next().value;
             wordCache.delete(firstKey);
           }
