@@ -548,6 +548,34 @@
   }
 
   // ============ API 调用 ============
+  async function sendLlmRequest(messages, options = {}) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          action: 'llmRequest',
+          messages,
+          temperature: options.temperature,
+          maxTokens: options.maxTokens
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!response) {
+            reject(new Error('请求失败：无响应'));
+            return;
+          }
+          if (!response.success) {
+            reject(new Error(response.error || '请求失败'));
+            return;
+          }
+          resolve(response.data);
+        }
+      );
+    });
+  }
+
   async function translateText(text) {
     if (!config.apiKey || !config.apiEndpoint) {
       throw new Error('API 未配置');
@@ -719,29 +747,14 @@ ${filteredText}
 ## 输出：
 只返回 JSON 数组，不要其他内容。`;
 
-        const response = await fetch(config.apiEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey}`
-          },
-          body: JSON.stringify({
-            model: config.modelName,
-            messages: [
-              { role: 'system', content: '你是一个专业的语言学习助手。始终返回有效的 JSON 格式。' },
-              { role: 'user', content: prompt }
-            ],
-            temperature: 0.3,
-            max_tokens: 2000
-          })
-        });
+        const data = await sendLlmRequest(
+          [
+            { role: 'system', content: '你是一个专业的语言学习助手。始终返回有效的 JSON 格式。' },
+            { role: 'user', content: prompt }
+          ],
+          { temperature: 0.3, maxTokens: 2000 }
+        );
 
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.error?.message || `API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
         const content = data.choices?.[0]?.message?.content || '[]';
         
         let allResults = [];
@@ -903,29 +916,14 @@ ${uncached.join(', ')}
 ## 输出：
 只返回 JSON 数组，不要其他内容。`;
 
-        const response = await fetch(config.apiEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey}`
-          },
-          body: JSON.stringify({
-            model: config.modelName,
-            messages: [
-              { role: 'system', content: '你是一个专业的语言学习助手。始终返回有效的 JSON 格式。' },
-              { role: 'user', content: prompt }
-            ],
-            temperature: 0.3,
-            max_tokens: 1000
-          })
-        });
+        const data = await sendLlmRequest(
+          [
+            { role: 'system', content: '你是一个专业的语言学习助手。始终返回有效的 JSON 格式。' },
+            { role: 'user', content: prompt }
+          ],
+          { temperature: 0.3, maxTokens: 1000 }
+        );
 
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.error?.message || `API Error: ${response.status}`);
-        }
-
-        const data = await response.json();
         const content = data.choices?.[0]?.message?.content || '[]';
 
         let apiResults = [];

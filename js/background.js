@@ -145,6 +145,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   
+  if (message.action === 'llmRequest') {
+    (async () => {
+      try {
+        const messages = message.messages;
+        if (!Array.isArray(messages) || messages.length === 0) {
+          sendResponse({ success: false, error: '请求参数无效' });
+          return;
+        }
+
+        const config = await new Promise((resolve) => {
+          chrome.storage.sync.get(['apiEndpoint', 'apiKey', 'modelName'], (result) => {
+            resolve(result);
+          });
+        });
+
+        const apiEndpoint = config.apiEndpoint;
+        const apiKey = config.apiKey;
+        const modelName = config.modelName;
+
+        if (!apiEndpoint || !apiKey || !modelName) {
+          sendResponse({ success: false, error: 'API 未配置' });
+          return;
+        }
+
+        const response = await fetch(apiEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: modelName,
+            messages,
+            temperature: typeof message.temperature === 'number' ? message.temperature : 0.3,
+            max_tokens: typeof message.maxTokens === 'number' ? message.maxTokens : 2000
+          })
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          const errorMessage = errorBody?.error?.message || errorBody?.message || `API Error: ${response.status}`;
+          sendResponse({ success: false, error: errorMessage, status: response.status });
+          return;
+        }
+
+        const data = await response.json();
+        sendResponse({ success: true, data });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message || String(error) });
+      }
+    })();
+
+    return true;
+  }
+  
   // 获取统计数据
   if (message.action === 'getStats') {
     chrome.storage.sync.get([
