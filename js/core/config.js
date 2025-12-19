@@ -69,6 +69,8 @@ export const DEFAULT_CONFIG = {
   apiEndpoint: API_PRESETS.deepseek.endpoint,
   apiKey: '',
   modelName: API_PRESETS.deepseek.model,
+  apiProtocol: 'openai_compatible',
+  reasoningEffort: '',
   
   // 学习偏好
   nativeLanguage: 'zh-CN',

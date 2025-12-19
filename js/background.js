@@ -13,6 +13,8 @@ chrome.runtime.onInstalled.addListener((details) => {
       apiEndpoint: 'https://api.deepseek.com/chat/completions',
       apiKey: '',
       modelName: 'deepseek-chat',
+      apiProtocol: 'openai_compatible',
+      reasoningEffort: '',
       nativeLanguage: 'zh-CN',
       targetLanguage: 'en',
       difficultyLevel: 'B1',
@@ -139,7 +141,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // 测试 API 连接
   if (message.action === 'testApi') {
-    testApiConnection(message.endpoint, message.apiKey, message.model)
+    testApiConnection(message.endpoint, message.apiKey, message.model, message.apiProtocol, message.reasoningEffort)
       .then(result => sendResponse(result))
       .catch(error => sendResponse({ success: false, message: error.message }));
     return true;
@@ -155,7 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         const config = await new Promise((resolve) => {
-          chrome.storage.sync.get(['apiEndpoint', 'apiKey', 'modelName'], (result) => {
+          chrome.storage.sync.get(['apiEndpoint', 'apiKey', 'modelName', 'apiProtocol', 'reasoningEffort'], (result) => {
             resolve(result);
           });
         });
@@ -163,11 +165,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const apiEndpoint = config.apiEndpoint;
         const apiKey = config.apiKey;
         const modelName = config.modelName;
+        const apiProtocol = config.apiProtocol || 'openai_compatible';
+        const reasoningEffort = config.reasoningEffort;
 
         if (!apiEndpoint || !apiKey || !modelName) {
           sendResponse({ success: false, error: 'API 未配置' });
           return;
         }
+
+        const requestBody = (() => {
+          const temperature = typeof message.temperature === 'number' ? message.temperature : 0.3;
+          const maxTokens = typeof message.maxTokens === 'number' ? message.maxTokens : 2000;
+
+          if (apiProtocol === 'openai_responses') {
+            const input = buildResponsesApiInput(messages);
+            const effort = typeof reasoningEffort === 'string' ? reasoningEffort.trim() : '';
+            return {
+              model: modelName,
+              input,
+              temperature,
+              max_output_tokens: maxTokens,
+              ...(effort ? { reasoning: { effort } } : {})
+            };
+          }
+
+          return {
+            model: modelName,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+          };
+        })();
 
         const response = await fetch(apiEndpoint, {
           method: 'POST',
@@ -175,23 +203,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`
           },
-          body: JSON.stringify({
-            model: modelName,
-            messages,
-            temperature: typeof message.temperature === 'number' ? message.temperature : 0.3,
-            max_tokens: typeof message.maxTokens === 'number' ? message.maxTokens : 2000
-          })
+          body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          const errorMessage = errorBody?.error?.message || errorBody?.message || `API Error: ${response.status}`;
+          const errorMessage = await extractErrorMessageFromResponse(response);
           sendResponse({ success: false, error: errorMessage, status: response.status });
           return;
         }
 
         const data = await response.json();
-        sendResponse({ success: true, data });
+        const normalizedData = apiProtocol === 'openai_responses'
+          ? normalizeResponsesApiToChatCompletions(data)
+          : data;
+        sendResponse({ success: true, data: normalizedData });
       } catch (error) {
         sendResponse({ success: false, error: error.message || String(error) });
       }
@@ -268,28 +293,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// 测试 API 连接
-async function testApiConnection(endpoint, apiKey, model) {
+async function extractErrorMessageFromResponse(response) {
   try {
+    const rawText = await response.text().catch(() => '');
+    const text = rawText.length > 2000 ? `${rawText.slice(0, 2000)}...` : rawText;
+
+    let parsed = null;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        parsed = null;
+      }
+    }
+
+    const message = parsed?.error?.message || parsed?.message || text || response.statusText || '';
+    return message ? `HTTP ${response.status}: ${message}` : `HTTP ${response.status}`;
+  } catch (e) {
+    return `HTTP ${response.status}`;
+  }
+}
+
+// 测试 API 连接
+async function testApiConnection(endpoint, apiKey, model, apiProtocol = 'openai_compatible', reasoningEffort = '') {
+  try {
+    const requestBody = apiProtocol === 'openai_responses'
+      ? {
+        model,
+        input: [{ role: 'user', content: 'Say OK' }],
+        max_output_tokens: 10,
+        ...(typeof reasoningEffort === 'string' && reasoningEffort.trim()
+          ? { reasoning: { effort: reasoningEffort.trim() } }
+          : {})
+      }
+      : {
+        model: model,
+        messages: [{ role: 'user', content: 'Say OK' }],
+        max_tokens: 10
+      };
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: model,
-        messages: [{ role: 'user', content: 'Say OK' }],
-        max_tokens: 10
-      })
+      body: JSON.stringify(requestBody)
     });
     
     if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error?.message || `HTTP ${response.status}`);
+      const errorMessage = await extractErrorMessageFromResponse(response);
+      throw new Error(errorMessage || `HTTP ${response.status}`);
     }
     
     const data = await response.json();
+    if (apiProtocol === 'openai_responses') {
+      const outputText = extractResponsesApiText(data);
+      if (outputText) {
+        return { success: true, message: '连接成功！' };
+      }
+      throw new Error('Invalid response');
+    }
+
     if (data.choices && data.choices[0]) {
       return { success: true, message: '连接成功！' };
     }
@@ -298,6 +363,78 @@ async function testApiConnection(endpoint, apiKey, model) {
   } catch (error) {
     return { success: false, message: error.message };
   }
+}
+
+function buildResponsesApiInput(messages) {
+  const inputMessages = [];
+
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== 'object') continue;
+
+    const role = msg.role;
+    const content = msg.content;
+    if (typeof role === 'string') {
+      inputMessages.push({ role: normalizeResponsesApiRole(role), content });
+    }
+  }
+
+  return inputMessages;
+}
+
+function normalizeResponsesApiRole(role) {
+  if (role === 'system') {
+    return 'developer';
+  }
+  return role;
+}
+
+function extractResponsesApiText(data) {
+  if (!data || typeof data !== 'object') {
+    return '';
+  }
+
+  if (typeof data.output_text === 'string' && data.output_text) {
+    return data.output_text;
+  }
+
+  if (!Array.isArray(data.output)) {
+    return '';
+  }
+
+  const texts = [];
+  for (const item of data.output) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type !== 'message') continue;
+    if (!Array.isArray(item.content)) continue;
+
+    for (const part of item.content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type !== 'output_text') continue;
+      if (typeof part.text !== 'string') continue;
+      texts.push(part.text);
+    }
+  }
+
+  return texts.join('');
+}
+
+function normalizeResponsesApiToChatCompletions(data) {
+  const content = extractResponsesApiText(data);
+  return {
+    ...data,
+    choices: [
+      {
+        message: {
+          role: 'assistant',
+          content
+        }
+      }
+    ]
+  };
 }
 
 // 扩展图标点击（如果没有 popup）
