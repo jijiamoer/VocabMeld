@@ -5,11 +5,11 @@
 document.addEventListener('DOMContentLoaded', async () => {
   // 默认 API 配置
   const DEFAULT_API_CONFIGS = {
-    'OpenAI': { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: '', model: 'gpt-4o-mini' },
-    'DeepSeek': { endpoint: 'https://api.deepseek.com/chat/completions', apiKey: '', model: 'deepseek-chat' },
-    'Moonshot': { endpoint: 'https://api.moonshot.cn/v1/chat/completions', apiKey: '', model: 'moonshot-v1-8k' },
-    'Groq': { endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: '', model: 'llama-3.1-8b-instant' },
-    'Ollama': { endpoint: 'http://localhost:11434/v1/chat/completions', apiKey: '', model: 'qwen2.5:7b' }
+    'OpenAI': { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: '', model: 'gpt-4o-mini', protocol: 'openai_compatible' },
+    'DeepSeek': { endpoint: 'https://api.deepseek.com/chat/completions', apiKey: '', model: 'deepseek-chat', protocol: 'openai_compatible' },
+    'Moonshot': { endpoint: 'https://api.moonshot.cn/v1/chat/completions', apiKey: '', model: 'moonshot-v1-8k', protocol: 'openai_compatible' },
+    'Groq': { endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey: '', model: 'llama-3.1-8b-instant', protocol: 'openai_compatible' },
+    'Ollama': { endpoint: 'http://localhost:11434/v1/chat/completions', apiKey: '', model: 'qwen2.5:7b', protocol: 'openai_compatible' }
   };
 
   // 当前配置状态
@@ -40,6 +40,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     apiEndpoint: document.getElementById('apiEndpoint'),
     apiKey: document.getElementById('apiKey'),
     modelName: document.getElementById('modelName'),
+    apiProtocol: document.getElementById('apiProtocol'),
+    reasoningEffortSelect: document.getElementById('reasoningEffortSelect'),
+    reasoningEffortCustomGroup: document.getElementById('reasoningEffortCustomGroup'),
+    reasoningEffortCustom: document.getElementById('reasoningEffortCustom'),
     toggleApiKey: document.getElementById('toggleApiKey'),
     testConnectionBtn: document.getElementById('testConnectionBtn'),
     testResult: document.getElementById('testResult'),
@@ -100,6 +104,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     resetTodayBtn: document.getElementById('resetTodayBtn'),
     resetAllBtn: document.getElementById('resetAllBtn')
   };
+
+  function getReasoningEffortFromUI() {
+    const selectValue = elements.reasoningEffortSelect?.value || '';
+    if (selectValue === '_custom') {
+      return (elements.reasoningEffortCustom?.value || '').trim();
+    }
+    return selectValue;
+  }
+
+  function applyReasoningEffortToUI(value) {
+    const effort = typeof value === 'string' ? value.trim() : '';
+    const allowed = ['', 'none', 'low', 'medium', 'high'];
+
+    if (!elements.reasoningEffortSelect || !elements.reasoningEffortCustomGroup) {
+      return;
+    }
+
+    if (allowed.includes(effort)) {
+      elements.reasoningEffortSelect.value = effort;
+      elements.reasoningEffortCustomGroup.style.display = 'none';
+      return;
+    }
+
+    if (effort) {
+      elements.reasoningEffortSelect.value = '_custom';
+      if (elements.reasoningEffortCustom) {
+        elements.reasoningEffortCustom.value = effort;
+      }
+      elements.reasoningEffortCustomGroup.style.display = 'block';
+      return;
+    }
+
+    elements.reasoningEffortSelect.value = '';
+    elements.reasoningEffortCustomGroup.style.display = 'none';
+  }
+
+  function updateReasoningEffortCustomVisibility() {
+    if (!elements.reasoningEffortSelect || !elements.reasoningEffortCustomGroup) {
+      return;
+    }
+    const isCustom = elements.reasoningEffortSelect.value === '_custom';
+    elements.reasoningEffortCustomGroup.style.display = isCustom ? 'block' : 'none';
+  }
 
   // 应用主题
   function applyTheme(theme) {
@@ -197,6 +244,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.storage.sync.get(['apiConfigs', 'currentApiConfig'], (result) => {
       // 如果没有配置，使用默认配置
       apiConfigs = result.apiConfigs || { ...DEFAULT_API_CONFIGS };
+
+      Object.keys(apiConfigs).forEach(name => {
+        if (apiConfigs[name] && !apiConfigs[name].protocol) {
+          apiConfigs[name].protocol = 'openai_compatible';
+        }
+
+        if (apiConfigs[name] && typeof apiConfigs[name].reasoningEffort !== 'string') {
+          apiConfigs[name].reasoningEffort = '';
+        }
+      });
+
       currentConfigName = result.currentApiConfig || Object.keys(apiConfigs)[0] || '';
       
       updateConfigSelect();
@@ -235,6 +293,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.apiEndpoint.value = '';
       elements.apiKey.value = '';
       elements.modelName.value = '';
+      elements.apiProtocol.value = 'openai_compatible';
+      applyReasoningEffortToUI('');
       currentConfigName = '';
       return;
     }
@@ -244,6 +304,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     elements.apiEndpoint.value = config.endpoint || '';
     elements.apiKey.value = config.apiKey || '';
     elements.modelName.value = config.model || '';
+    elements.apiProtocol.value = config.protocol || 'openai_compatible';
+    applyReasoningEffortToUI(config.reasoningEffort || '');
     currentConfigName = name;
   }
 
@@ -253,6 +315,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const endpoint = elements.apiEndpoint.value.trim();
     const apiKey = elements.apiKey.value.trim();
     const model = elements.modelName.value.trim();
+    const protocol = elements.apiProtocol.value;
+    const reasoningEffort = getReasoningEffortFromUI();
     
     // 非空检测
     if (!configName) {
@@ -282,7 +346,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     apiConfigs[configName] = {
       endpoint: endpoint,
       apiKey: apiKey,
-      model: model
+      model: model,
+      protocol: protocol,
+      reasoningEffort: reasoningEffort
     };
     
     currentConfigName = configName;
@@ -293,7 +359,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentApiConfig: currentConfigName,
       apiEndpoint: endpoint,
       apiKey: apiKey,
-      modelName: model
+      modelName: model,
+      apiProtocol: protocol,
+      reasoningEffort: reasoningEffort
     }, () => {
       updateConfigSelect();
       showConfigToast(`配置 "${configName}" 已保存`);
@@ -327,7 +395,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.storage.sync.set({
         apiEndpoint: config.endpoint,
         apiKey: config.apiKey,
-        modelName: config.model
+        modelName: config.model,
+        apiProtocol: config.protocol || 'openai_compatible',
+        reasoningEffort: config.reasoningEffort || ''
       });
       showConfigToast(`配置 "${configName}" 已删除`);
     });
@@ -366,6 +436,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         elements.apiEndpoint.value = result.apiEndpoint || DEFAULT_API_CONFIGS['DeepSeek'].endpoint;
         elements.apiKey.value = result.apiKey || '';
         elements.modelName.value = result.modelName || DEFAULT_API_CONFIGS['DeepSeek'].model;
+        elements.apiProtocol.value = result.apiProtocol || 'openai_compatible';
+        applyReasoningEffortToUI(result.reasoningEffort || '');
       }
       
       // 学习偏好
@@ -659,6 +731,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       apiEndpoint: elements.apiEndpoint.value.trim(),
       apiKey: elements.apiKey.value.trim(),
       modelName: elements.modelName.value.trim(),
+      apiProtocol: elements.apiProtocol.value,
+      reasoningEffort: getReasoningEffortFromUI(),
       nativeLanguage: elements.nativeLanguage.value,
       targetLanguage: elements.targetLanguage.value,
       difficultyLevel: CEFR_LEVELS[elements.difficultyLevel.value],
@@ -690,6 +764,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.apiEndpoint,
       elements.apiKey,
       elements.modelName,
+      elements.reasoningEffortCustom,
       elements.excludedSitesInput,
       elements.allowedSitesInput
     ];
@@ -701,6 +776,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 下拉框 - 改变时保存
     elements.nativeLanguage.addEventListener('change', () => debouncedSave(200));
+    elements.apiProtocol.addEventListener('change', () => debouncedSave(200));
+    if (elements.reasoningEffortSelect) {
+      elements.reasoningEffortSelect.addEventListener('change', () => {
+        updateReasoningEffortCustomVisibility();
+        if (elements.reasoningEffortSelect.value === '_custom' && elements.reasoningEffortCustom) {
+          elements.reasoningEffortCustom.focus();
+        }
+        debouncedSave(200);
+      });
+    }
     
     // 缓存上限 - 改变时保存
     elements.cacheMaxSizeRadios.forEach(radio => {
@@ -855,7 +940,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           currentApiConfig: selectedValue,
           apiEndpoint: elements.apiEndpoint.value,
           apiKey: elements.apiKey.value,
-          modelName: elements.modelName.value
+          modelName: elements.modelName.value,
+          apiProtocol: elements.apiProtocol.value,
+          reasoningEffort: getReasoningEffortFromUI()
         });
       }
     });
@@ -877,6 +964,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.apiEndpoint.value = '';
       elements.apiKey.value = '';
       elements.modelName.value = '';
+      elements.apiProtocol.value = 'openai_compatible';
+      applyReasoningEffortToUI('');
       currentConfigName = '';
       elements.configName.focus();
     });
@@ -903,7 +992,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         action: 'testApi',
         endpoint: elements.apiEndpoint.value,
         apiKey: elements.apiKey.value,
-        model: elements.modelName.value
+        model: elements.modelName.value,
+        apiProtocol: elements.apiProtocol.value,
+        reasoningEffort: getReasoningEffortFromUI()
       }, (response) => {
         elements.testConnectionBtn.disabled = false;
         if (response?.success) {
