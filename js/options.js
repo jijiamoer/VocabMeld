@@ -480,7 +480,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           word: item.translation, 
           addedAt: item.timestamp,
           difficulty: item.difficulty || 'B1',
-          phonetic: item.phonetic || ''
+          phonetic: item.phonetic || '',
+          cacheKey: item.key // 保存完整的缓存key用于删除
         };
       });
       
@@ -510,7 +511,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ${w.word ? `<span class="word-translation">${w.word}</span>` : ''}
         ${w.difficulty ? `<span class="word-difficulty difficulty-${w.difficulty.toLowerCase()}">${w.difficulty}</span>` : ''}
         <span class="word-date">${formatDate(w.addedAt)}</span>
-        ${type !== 'cached' ? `<button class="word-remove" data-word="${w.original}" data-type="${type}">&times;</button>` : ''}
+        ${type !== 'cached' ? `<button class="word-remove" data-word="${w.original}" data-type="${type}">&times;</button>` : `<button class="word-remove" data-key="${w.cacheKey || ''}" data-type="cached">&times;</button>`}
       </div>
     `).join('');
 
@@ -521,7 +522,25 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 绑定删除事件
     container.querySelectorAll('.word-remove').forEach(btn => {
-      btn.addEventListener('click', () => removeWord(btn.dataset.word, btn.dataset.type));
+      btn.addEventListener('click', () => {
+        if (btn.dataset.type === 'cached') {
+          removeCacheItem(btn.dataset.key);
+        } else {
+          removeWord(btn.dataset.word, btn.dataset.type);
+        }
+      });
+    });
+  }
+  
+  // 删除单个缓存项
+  function removeCacheItem(key) {
+    if (!key) return;
+    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
+      const cache = data.vocabmeld_word_cache || [];
+      const newCache = cache.filter(item => item.key !== key);
+      chrome.storage.local.set({ vocabmeld_word_cache: newCache }, () => {
+        loadSettings();
+      });
     });
   }
 
