@@ -226,6 +226,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     return true;
   }
+
+  // 发送 API 请求（避免 CORS 问题）
+  if (message.action === 'apiRequest') {
+    callApi(message.endpoint, message.apiKey, message.body)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
   
   // 获取统计数据
   if (message.action === 'getStats') {
@@ -469,6 +477,25 @@ async function readResponsesApiSse(response) {
   return { ...base, output_text: text };
 }
 
+// 通用 API 调用（从 background 发起，避免 CORS）
+async function callApi(endpoint, apiKey, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const errorMessage = await extractErrorMessageFromResponse(response);
+    throw new Error(errorMessage || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
 // 测试 API 连接
 async function testApiConnection(endpoint, apiKey, model, apiProtocol = 'openai_compatible', reasoningEffort = '') {
   try {
@@ -487,20 +514,20 @@ async function testApiConnection(endpoint, apiKey, model, apiProtocol = 'openai_
         max_tokens: 10
       };
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
+      headers,
       body: JSON.stringify(requestBody)
     });
-    
+
     if (!response.ok) {
       const errorMessage = await extractErrorMessageFromResponse(response);
       throw new Error(errorMessage || `HTTP ${response.status}`);
     }
-    
+
     const data = apiProtocol === 'openai_responses'
       ? await parseResponsesApiResponse(response)
       : await response.json();
@@ -515,7 +542,7 @@ async function testApiConnection(endpoint, apiKey, model, apiProtocol = 'openai_
     if (data.choices && data.choices[0]) {
       return { success: true, message: '连接成功！' };
     }
-    
+
     throw new Error('Invalid response');
   } catch (error) {
     return { success: false, message: error.message };

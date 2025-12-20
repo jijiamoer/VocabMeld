@@ -26,6 +26,9 @@
   let wordCache = new Map();
   let tooltip = null;
   let selectionPopup = null;
+  let intersectionObserver = null;
+  let pendingContainers = new Set(); // 待处理的可见容器
+  let tooltipHideTimeout = null; // tooltip 延迟隐藏计时器
 
   // ============ 工具函数 ============
   function isDifficultyCompatible(wordDifficulty, userDifficulty) {
@@ -68,8 +71,17 @@
 
     if (japaneseCount / total > 0.1) return 'ja';
     if (koreanCount / total > 0.1) return 'ko';
-    if (chineseCount / total > 0.3) return 'zh-CN';
+    if (chineseCount / total > 0.3) return 'zh'; // 返回通用中文标识
     return 'en';
+  }
+
+  // 判断检测到的语言是否与用户设置的母语匹配
+  function isNativeLanguage(detectedLang, nativeLang) {
+    // 中文简繁体视为同一语系
+    if (detectedLang === 'zh' && (nativeLang === 'zh-CN' || nativeLang === 'zh-TW')) {
+      return true;
+    }
+    return detectedLang === nativeLang;
   }
 
   function isCodeText(text) {
@@ -123,6 +135,7 @@
           targetLanguage: result.targetLanguage || 'en',
           difficultyLevel: result.difficultyLevel || 'B1',
           intensity: result.intensity || 'medium',
+          processMode: result.processMode || 'both',
           autoProcess: result.autoProcess ?? false,
           showPhonetic: result.showPhonetic ?? true,
           showAddMemorize: result.showAddMemorize ?? true,
@@ -275,20 +288,28 @@
   }
 
   // ============ DOM 处理 ============
-  function shouldSkipNode(node) {
+  function shouldSkipNode(node, skipStyleCheck = false) {
     if (!node) return true;
     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.TEXT_NODE) return true;
-    if (node.nodeType === Node.TEXT_NODE) return shouldSkipNode(node.parentElement);
+    if (node.nodeType === Node.TEXT_NODE) return shouldSkipNode(node.parentElement, skipStyleCheck);
 
     const element = node;
     if (SKIP_TAGS.includes(element.tagName)) return true;
     const classList = element.className?.toString() || '';
     if (SKIP_CLASSES.some(cls => classList.includes(cls))) return true;
 
-    try {
-      const style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden') return true;
-    } catch (e) {}
+    // 使用更轻量的可见性检测，避免频繁触发 getComputedStyle
+    if (!skipStyleCheck) {
+      // 使用 offsetParent 快速检测是否隐藏（display: none 的元素 offsetParent 为 null）
+      // 注意：position: fixed 元素的 offsetParent 也是 null，但这些通常不需要处理
+      if (element.offsetParent === null && element.tagName !== 'BODY' && element.tagName !== 'HTML') {
+        // 排除 position: fixed 的情况
+        const position = element.style.position;
+        if (position !== 'fixed' && position !== 'sticky') {
+          return true;
+        }
+      }
+    }
 
     if (element.isContentEditable) return true;
     if (element.hasAttribute('data-vocabmeld-processed')) return true;
@@ -346,7 +367,9 @@
     return texts.join(' ').replace(/\s+/g, ' ').trim();
   }
 
-  function getPageSegments(viewportOnly = false, margin = 300) {
+  const MAX_SEGMENTS_PER_BATCH = 20; // 每批最多处理的段落数
+
+  function getPageSegments(viewportOnly = false, margin = 500) {
     const segments = [];
     let viewportTop = 0, viewportBottom = Infinity;
     
@@ -358,6 +381,9 @@
     const containers = findTextContainers(document.body);
 
     for (const container of containers) {
+      // 已达到批次上限，停止添加
+      if (segments.length >= MAX_SEGMENTS_PER_BATCH) break;
+
       if (viewportOnly) {
         const rect = container.getBoundingClientRect();
         const elementTop = rect.top + window.scrollY;
@@ -439,11 +465,13 @@
             return NodeFilter.FILTER_REJECT;
           }
           
-          // 跳过隐藏元素
-          try {
-            const style = window.getComputedStyle(parent);
-            if (style.display === 'none' || style.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
-          } catch (e) {}
+          // 跳过隐藏元素（使用 offsetParent 快速检测）
+          if (parent.offsetParent === null && parent.tagName !== 'BODY' && parent.tagName !== 'HTML') {
+            const position = parent.style.position;
+            if (position !== 'fixed' && position !== 'sticky') {
+              return NodeFilter.FILTER_REJECT;
+            }
+          }
           
           // 跳过可编辑元素
           if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
@@ -541,10 +569,21 @@
     element.parentNode.replaceChild(textNode, element);
   }
 
+  // 恢复页面上所有相同单词的原文
+  function restoreAllSameWord(originalWord) {
+    document.querySelectorAll('.vocabmeld-translated').forEach(el => {
+      if (el.getAttribute('data-original')?.toLowerCase() === originalWord.toLowerCase()) {
+        restoreOriginal(el);
+      }
+    });
+  }
+
   function restoreAll() {
     document.querySelectorAll('.vocabmeld-translated').forEach(restoreOriginal);
     document.querySelectorAll('[data-vocabmeld-processed]').forEach(el => el.removeAttribute('data-vocabmeld-processed'));
+    document.querySelectorAll('[data-vocabmeld-observing]').forEach(el => el.removeAttribute('data-vocabmeld-observing'));
     processedFingerprints.clear();
+    pendingContainers.clear();
   }
 
   // ============ API 调用 ============
@@ -577,7 +616,7 @@
   }
 
   async function translateText(text) {
-    if (!config.apiKey || !config.apiEndpoint) {
+    if (!config.apiEndpoint) {
       throw new Error('API 未配置');
     }
 
@@ -586,8 +625,22 @@
       await loadWordCache();
     }
 
-    const sourceLang = detectLanguage(text);
-    const targetLang = sourceLang === config.nativeLanguage ? config.targetLanguage : config.nativeLanguage;
+    const detectedLang = detectLanguage(text);
+    const isNative = isNativeLanguage(detectedLang, config.nativeLanguage);
+    
+    // 根据处理模式检查是否需要处理该文本
+    // native-only: 只处理母语网页（将母语翻译为目标语言）
+    // target-only: 只处理目标语言网页（将目标语言翻译为母语）
+    // both: 两者均处理
+    if (config.processMode === 'native-only' && !isNative) {
+      return { immediate: [], async: null };
+    }
+    if (config.processMode === 'target-only' && isNative) {
+      return { immediate: [], async: null };
+    }
+    
+    const sourceLang = isNative ? config.nativeLanguage : detectedLang;
+    const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
     const maxReplacements = INTENSITY_CONFIG[config.intensity]?.maxPerParagraph || 8;
 
     // 检查缓存 - 只检查有意义的词汇（排除常见停用词）
@@ -662,9 +715,15 @@
       }
     }
 
-    // 过滤缓存结果（按难度）
+    // 获取已学会单词列表
+    const learnedWordsSet = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
+    
+    // 过滤缓存结果（按难度，排除已学会单词）
     const filteredCached = cached
-      .filter(c => isDifficultyCompatible(c.difficulty || 'B1', config.difficultyLevel))
+      .filter(c => 
+        isDifficultyCompatible(c.difficulty || 'B1', config.difficultyLevel) &&
+        !learnedWordsSet.has(c.word.toLowerCase())
+      )
       .map(c => {
         const idx = text.toLowerCase().indexOf(c.word.toLowerCase());
         return { 
@@ -831,22 +890,27 @@ ${filteredText}
           };
         });
 
-        // 合并缓存结果（去重，避免与已显示的缓存结果重复）
+        // 合并缓存结果（去重，避免与已显示的缓存结果重复，排除已学会单词）
         const immediateWords = new Set(immediateResults.map(r => r.original.toLowerCase()));
+        const currentLearnedWords = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
         const cachedResults = cached
           .filter(c => 
             !immediateWords.has(c.word.toLowerCase()) && 
             !correctedResults.some(r => r.original.toLowerCase() === c.word.toLowerCase()) &&
+            !currentLearnedWords.has(c.word.toLowerCase()) &&
             isDifficultyCompatible(c.difficulty || 'B1', config.difficultyLevel)
           )
           .map(c => {
             const idx = text.toLowerCase().indexOf(c.word.toLowerCase());
             return { original: c.word, translation: c.translation, phonetic: c.phonetic, difficulty: c.difficulty, position: idx, fromCache: true };
           });
+        
+        // API 结果也要过滤已学会单词
+        const filteredCorrectedResults = correctedResults.filter(r => !currentLearnedWords.has(r.original.toLowerCase()));
 
         // 合并结果：补充的缓存结果 + API结果
         // 限制异步替换数量（如果缓存已满足配置或文本极少，最多只替换1个词）
-        const mergedResults = [...cachedResults, ...correctedResults];
+        const mergedResults = [...cachedResults, ...filteredCorrectedResults];
         return mergedResults.slice(0, maxAsyncReplacements);
 
       } catch (error) {
@@ -861,12 +925,14 @@ ${filteredText}
 
   // ============ 特定单词处理 ============
   async function translateSpecificWords(targetWords) {
-    if (!config.apiKey || !config.apiEndpoint || !targetWords?.length) {
+    if (!config.apiEndpoint || !targetWords?.length) {
       return [];
     }
 
-    const sourceLang = detectLanguage(targetWords.join(' '));
-    const targetLang = sourceLang === config.nativeLanguage ? config.targetLanguage : config.nativeLanguage;
+    const detectedLang = detectLanguage(targetWords.join(' '));
+    const isNative = isNativeLanguage(detectedLang, config.nativeLanguage);
+    const sourceLang = isNative ? config.nativeLanguage : detectedLang;
+    const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
 
     const uncached = [];
     const cached = [];
@@ -923,7 +989,6 @@ ${uncached.join(', ')}
           ],
           { temperature: 0.3, maxTokens: 1000 }
         );
-
         const content = data.choices?.[0]?.message?.content || '[]';
 
         let apiResults = [];
@@ -1022,11 +1087,13 @@ ${uncached.join(', ')}
           return NodeFilter.FILTER_REJECT;
         }
         
-        // 跳过隐藏元素
-        try {
-          const style = window.getComputedStyle(parent);
-          if (style.display === 'none' || style.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
-        } catch (e) {}
+        // 跳过隐藏元素（使用 offsetParent 快速检测）
+        if (parent.offsetParent === null && parent.tagName !== 'BODY' && parent.tagName !== 'HTML') {
+          const position = parent.style.position;
+          if (position !== 'fixed' && position !== 'sticky') {
+            return NodeFilter.FILTER_REJECT;
+          }
+        }
         
         // 跳过可编辑元素
         if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
@@ -1138,20 +1205,197 @@ ${uncached.join(', ')}
 
   // ============ 页面处理 ============
   const MAX_CONCURRENT = 3; // 最大并发请求数
+  const PROCESS_DELAY_MS = 50; // 批次间延迟，避免阻塞主线程
 
-  async function processPage(viewportOnly = false) {
-    if (isProcessing) return { processed: 0, skipped: true };
+  // 使用 IntersectionObserver 实现懒加载
+  function setupIntersectionObserver() {
+    if (intersectionObserver) {
+      intersectionObserver.disconnect();
+    }
+
+    intersectionObserver = new IntersectionObserver((entries) => {
+      let hasNewVisible = false;
+      
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          const container = entry.target;
+          // 跳过已处理的容器
+          if (container.hasAttribute('data-vocabmeld-processed')) {
+            continue;
+          }
+          
+          // 添加到待处理队列（即使已有 observing 标记，因为可能之前处理时被跳过了）
+          if (!pendingContainers.has(container)) {
+            pendingContainers.add(container);
+            container.setAttribute('data-vocabmeld-observing', 'true');
+            hasNewVisible = true;
+          }
+        }
+      }
+
+      // 有新可见容器时，触发处理
+      if (hasNewVisible && config?.enabled && !isProcessing) {
+        processPendingContainers();
+      }
+    }, {
+      rootMargin: '500px 0px', // 提前 500px 开始加载
+      threshold: 0
+    });
+  }
+
+  // 处理待处理的可见容器
+  const processPendingContainers = debounce(async () => {
+    if (isProcessing || pendingContainers.size === 0) return;
+    
+    isProcessing = true;
+    
+    try {
+      const containers = Array.from(pendingContainers).slice(0, MAX_SEGMENTS_PER_BATCH);
+      // 只移除本次要处理的容器，保留后续添加的
+      for (const container of containers) {
+        pendingContainers.delete(container);
+      }
+      
+      // 收集需要处理的段落
+      const segments = [];
+      const whitelistWords = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
+      
+      for (const container of containers) {
+        // 移除观察标记
+        container.removeAttribute('data-vocabmeld-observing');
+        
+        if (container.hasAttribute('data-vocabmeld-processed')) continue;
+        
+        const text = getTextContent(container);
+        if (!text || text.length < 50) continue;
+        if (isCodeText(text)) continue;
+        
+        const path = getElementPath(container);
+        const fingerprint = generateFingerprint(text, path);
+        if (processedFingerprints.has(fingerprint)) continue;
+        
+        // 过滤白名单词汇
+        let filteredText = text;
+        for (const word of whitelistWords) {
+          const regex = new RegExp(`\\b${word}\\b`, 'gi');
+          filteredText = filteredText.replace(regex, '');
+        }
+        
+        if (filteredText.trim().length >= 30) {
+          segments.push({ element: container, text: text.slice(0, 2000), filteredText, fingerprint, path });
+        }
+      }
+
+      // 分批处理
+      for (let i = 0; i < segments.length; i += MAX_CONCURRENT) {
+        const batch = segments.slice(i, i + MAX_CONCURRENT);
+        await Promise.all(batch.map(segment => processSegmentAsync(segment, whitelistWords)));
+        
+        // 添加延迟，避免阻塞主线程
+        if (i + MAX_CONCURRENT < segments.length) {
+          await new Promise(resolve => setTimeout(resolve, PROCESS_DELAY_MS));
+        }
+      }
+    } finally {
+      isProcessing = false;
+      
+      // 如果还有待处理的容器，继续处理
+      if (pendingContainers.size > 0) {
+        processPendingContainers();
+      }
+    }
+  }, 100);
+
+  // 异步处理单个段落
+  async function processSegmentAsync(segment, whitelistWords) {
+    try {
+      const result = await translateText(segment.filteredText);
+      
+      // 先应用缓存结果
+      if (result.immediate?.length) {
+        const filtered = result.immediate.filter(r => !whitelistWords.has(r.original.toLowerCase()));
+        applyReplacements(segment.element, filtered);
+        processedFingerprints.add(segment.fingerprint);
+      }
+      
+      // 异步结果
+      if (result.async) {
+        result.async.then(asyncReplacements => {
+          if (asyncReplacements?.length) {
+            const alreadyReplaced = new Set();
+            segment.element.querySelectorAll('.vocabmeld-translated').forEach(el => {
+              const original = el.getAttribute('data-original');
+              if (original) alreadyReplaced.add(original.toLowerCase());
+            });
+            
+            const filtered = asyncReplacements.filter(r => 
+              !whitelistWords.has(r.original.toLowerCase()) &&
+              !alreadyReplaced.has(r.original.toLowerCase())
+            );
+            
+            if (filtered.length > 0) {
+              applyReplacements(segment.element, filtered);
+            }
+          }
+        }).catch(error => {
+          console.error('[VocabMeld] Async translation error:', error);
+        });
+      }
+    } catch (e) {
+      console.error('[VocabMeld] Segment error:', e);
+    }
+  }
+
+  // 检查元素是否在视口内
+  function isInViewport(element, margin = 500) {
+    const rect = element.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    return rect.bottom >= -margin && rect.top <= viewportHeight + margin;
+  }
+
+  // 观察页面中的文本容器
+  function observeTextContainers() {
+    if (!intersectionObserver) return;
+    
+    const containers = findTextContainers(document.body);
+    let hasVisibleUnprocessed = false;
+    
+    for (const container of containers) {
+      // 跳过已处理的容器
+      if (container.hasAttribute('data-vocabmeld-processed')) {
+        continue;
+      }
+      
+      // 检查是否在视口内且未被处理
+      if (isInViewport(container)) {
+        // 已经在视口内的容器，直接添加到待处理队列
+        if (!container.hasAttribute('data-vocabmeld-observing')) {
+          pendingContainers.add(container);
+          container.setAttribute('data-vocabmeld-observing', 'true');
+          hasVisibleUnprocessed = true;
+        }
+      }
+      
+      // 观察所有未处理的容器（用于后续滚动）
+      intersectionObserver.observe(container);
+    }
+    
+    // 如果有可见但未处理的容器，立即触发处理
+    if (hasVisibleUnprocessed && config?.enabled && !isProcessing) {
+      processPendingContainers();
+    }
+  }
+
+  async function processPage(viewportOnly = true) {
     if (!config?.enabled) return { processed: 0, disabled: true };
 
     // 检查站点规则
     const hostname = window.location.hostname;
     if (config.siteMode === 'all') {
-      // 所有网站模式：检查是否在排除列表中
       if (config.excludedSites?.some(domain => hostname.includes(domain))) {
         return { processed: 0, excluded: true };
       }
     } else {
-      // 仅指定网站模式：检查是否在允许列表中
       if (!config.allowedSites?.some(domain => hostname.includes(domain))) {
         return { processed: 0, excluded: true };
       }
@@ -1162,102 +1406,16 @@ ${uncached.join(', ')}
       await loadWordCache();
     }
 
-    isProcessing = true;
-    let processed = 0, errors = 0;
-
-    try {
-      // 首先处理记忆列表中的单词（优先处理）
-      const memorizeWords = (config.memorizeList || []).map(w => w.word).filter(w => w && w.trim());
-      if (memorizeWords.length > 0 && !viewportOnly) {
-        try {
-          const memorizeCount = await processSpecificWords(memorizeWords);
-          processed += memorizeCount;
-        } catch (e) {
-          console.error('[VocabMeld] Error processing memorize list:', e);
-          errors++;
-        }
-      }
-
-      const segments = getPageSegments(viewportOnly);
-
-      const whitelistWords = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
-
-      // 预处理：过滤有效的 segments
-      const validSegments = [];
-      for (const segment of segments) {
-        let text = segment.text;
-        for (const word of whitelistWords) {
-          const regex = new RegExp(`\\b${word}\\b`, 'gi');
-          text = text.replace(regex, '');
-        }
-        if (text.trim().length >= 30) {
-          validSegments.push({ ...segment, filteredText: text });
-        }
-      }
-
-      // 并行处理单个 segment（支持异步更新）
-      async function processSegment(segment) {
-        try {
-          const result = await translateText(segment.filteredText);
-          
-          // 先应用缓存结果（立即显示）
-          let immediateCount = 0;
-          if (result.immediate?.length) {
-            const filtered = result.immediate.filter(r => !whitelistWords.has(r.original.toLowerCase()));
-            immediateCount = applyReplacements(segment.element, filtered);
-            processedFingerprints.add(segment.fingerprint);
-          }
-          
-          // 如果有异步结果，等待并更新（不阻塞）
-          if (result.async) {
-            result.async.then(async (asyncReplacements) => {
-              if (asyncReplacements?.length) {
-                // 获取已替换的词汇，避免重复替换
-                const alreadyReplaced = new Set();
-                segment.element.querySelectorAll('.vocabmeld-translated').forEach(el => {
-                  const original = el.getAttribute('data-original');
-                  if (original) {
-                    alreadyReplaced.add(original.toLowerCase());
-                  }
-                });
-                
-                // 过滤掉已替换的词汇
-                const filtered = asyncReplacements.filter(r => 
-                  !whitelistWords.has(r.original.toLowerCase()) &&
-                  !alreadyReplaced.has(r.original.toLowerCase())
-                );
-                
-                if (filtered.length > 0) {
-                  applyReplacements(segment.element, filtered);
-                }
-              }
-            }).catch(error => {
-              console.error('[VocabMeld] Async translation error:', error);
-            });
-          }
-          
-          return { count: immediateCount, error: false };
-        } catch (e) {
-          console.error('[VocabMeld] Segment error:', e);
-          return { count: 0, error: true };
-        }
-      }
-
-      // 分批并行处理（控制并发数）
-      for (let i = 0; i < validSegments.length; i += MAX_CONCURRENT) {
-        const batch = validSegments.slice(i, i + MAX_CONCURRENT);
-        const results = await Promise.all(batch.map(processSegment));
-        
-        for (const result of results) {
-          processed += result.count;
-          if (result.error) errors++;
-        }
-      }
-
-      return { processed, errors };
-    } finally {
-      isProcessing = false;
+    // 处理记忆列表中的单词
+    const memorizeWords = (config.memorizeList || []).map(w => w.word).filter(w => w && w.trim());
+    if (memorizeWords.length > 0) {
+      processSpecificWords(memorizeWords).catch(console.error);
     }
+
+    // 使用 IntersectionObserver 懒加载
+    observeTextContainers();
+
+    return { processed: 0, lazy: true };
   }
 
   // ============ UI 组件 ============
@@ -1278,6 +1436,11 @@ ${uncached.join(', ')}
     const translation = element.getAttribute('data-translation');
     const phonetic = element.getAttribute('data-phonetic');
     const difficulty = element.getAttribute('data-difficulty');
+    
+    // 检查是否已在记忆列表中
+    const isInMemorizeList = (config.memorizeList || []).some(w => 
+      w.word.toLowerCase() === original.toLowerCase()
+    );
 
     tooltip.innerHTML = `
       <div class="vocabmeld-tooltip-header">
@@ -1286,7 +1449,26 @@ ${uncached.join(', ')}
       </div>
       ${phonetic && config.showPhonetic ? `<div class="vocabmeld-tooltip-phonetic">${phonetic}</div>` : ''}
       <div class="vocabmeld-tooltip-original">原文: ${original}</div>
-      <div class="vocabmeld-tooltip-tip">左键点击发音 · 右键标记已学会</div>
+      <div class="vocabmeld-tooltip-actions">
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-speak" data-original="${original}" data-translation="${translation}" title="发音">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor" d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16C15.5,15.29 16.5,13.76 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/>
+          </svg>
+        </button>
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-memorize ${isInMemorizeList ? 'active' : ''}" data-original="${original}" title="${isInMemorizeList ? '已在记忆列表' : '添加到记忆列表'}">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            ${isInMemorizeList 
+              ? '<path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>'
+              : '<path fill="currentColor" d="M12.1,18.55L12,18.65L11.89,18.55C7.14,14.24 4,11.39 4,8.5C4,6.5 5.5,5 7.5,5C9.04,5 10.54,6 11.07,7.36H12.93C13.46,6 14.96,5 16.5,5C18.5,5 20,6.5 20,8.5C20,11.39 16.86,14.24 12.1,18.55M16.5,3C14.76,3 13.09,3.81 12,5.08C10.91,3.81 9.24,3 7.5,3C4.42,3 2,5.41 2,8.5C2,12.27 5.4,15.36 10.55,20.03L12,21.35L13.45,20.03C18.6,15.36 22,12.27 22,8.5C22,5.41 19.58,3 16.5,3Z"/>'
+            }
+          </svg>
+        </button>
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${original}" data-translation="${translation}" data-difficulty="${difficulty}" title="标记已学会">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
+          </svg>
+        </button>
+      </div>
     `;
 
     const rect = element.getBoundingClientRect();
@@ -1295,8 +1477,20 @@ ${uncached.join(', ')}
     tooltip.style.display = 'block';
   }
 
-  function hideTooltip() {
-    if (tooltip) tooltip.style.display = 'none';
+  function hideTooltip(immediate = false) {
+    if (immediate) {
+      clearTimeout(tooltipHideTimeout);
+      if (tooltip) tooltip.style.display = 'none';
+    } else {
+      // 延迟隐藏，给用户时间移动到 tooltip 上
+      tooltipHideTimeout = setTimeout(() => {
+        if (tooltip) tooltip.style.display = 'none';
+      }, 150);
+    }
+  }
+  
+  function cancelHideTooltip() {
+    clearTimeout(tooltipHideTimeout);
   }
 
   function showToast(message) {
@@ -1334,61 +1528,104 @@ ${uncached.join(', ')}
 
   // ============ 事件处理 ============
   function setupEventListeners() {
-    // 悬停显示提示 - 使用 mouseenter/mouseleave 更稳定
+    // 悬停显示提示
     document.addEventListener('mouseover', (e) => {
       const target = e.target.closest('.vocabmeld-translated');
+      const tooltipTarget = e.target.closest('.vocabmeld-tooltip');
+      
       if (target) {
+        cancelHideTooltip();
         showTooltip(target);
+      } else if (tooltipTarget) {
+        // 鼠标移入 tooltip 时取消隐藏
+        cancelHideTooltip();
       }
     });
 
     document.addEventListener('mouseout', (e) => {
       const target = e.target.closest('.vocabmeld-translated');
+      const tooltipTarget = e.target.closest('.vocabmeld-tooltip');
       const relatedTarget = e.relatedTarget;
       
-      // 只有当鼠标移出到非翻译元素和非tooltip时才隐藏
+      // 从翻译元素移出时，延迟隐藏
       if (target && 
           !relatedTarget?.closest('.vocabmeld-translated') && 
           !relatedTarget?.closest('.vocabmeld-tooltip')) {
         hideTooltip();
       }
-    });
-    
-    // 鼠标移出 tooltip 时也隐藏
-    document.addEventListener('mouseout', (e) => {
-      if (e.target.closest('.vocabmeld-tooltip') && 
-          !e.relatedTarget?.closest('.vocabmeld-tooltip') &&
-          !e.relatedTarget?.closest('.vocabmeld-translated')) {
+      
+      // 从 tooltip 移出时，延迟隐藏
+      if (tooltipTarget && 
+          !relatedTarget?.closest('.vocabmeld-tooltip') &&
+          !relatedTarget?.closest('.vocabmeld-translated')) {
         hideTooltip();
       }
     });
 
-    // 左键点击发音
+    // tooltip 按钮点击事件
     document.addEventListener('click', (e) => {
-      const target = e.target.closest('.vocabmeld-translated');
-      if (target) {
-        const word = target.getAttribute('data-translation');
+      // 发音按钮
+      const speakBtn = e.target.closest('.vocabmeld-btn-speak');
+      if (speakBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const original = speakBtn.getAttribute('data-original');
+        const translation = speakBtn.getAttribute('data-translation');
+        
+        // 检测 original 是否是目标语言
+        const originalLang = detectLanguage(original);
+        const isOriginalTargetLang = (originalLang === 'en' && config.targetLanguage === 'en') ||
+                                     (originalLang === 'zh' && (config.targetLanguage === 'zh-CN' || config.targetLanguage === 'zh-TW')) ||
+                                     (originalLang === 'ja' && config.targetLanguage === 'ja') ||
+                                     (originalLang === 'ko' && config.targetLanguage === 'ko');
+        
+        const word = isOriginalTargetLang ? original : translation;
         const lang = config.targetLanguage === 'en' ? 'en-US' : 
                      config.targetLanguage === 'zh-CN' ? 'zh-CN' :
+                     config.targetLanguage === 'zh-TW' ? 'zh-TW' :
                      config.targetLanguage === 'ja' ? 'ja-JP' :
                      config.targetLanguage === 'ko' ? 'ko-KR' : 'en-US';
         
         chrome.runtime.sendMessage({ action: 'speak', text: word, lang });
+        return;
       }
-    });
-
-    // 右键标记已学会
-    document.addEventListener('contextmenu', async (e) => {
-      const target = e.target.closest('.vocabmeld-translated');
-      if (target) {
+      
+      // 收藏/记忆按钮
+      const memorizeBtn = e.target.closest('.vocabmeld-btn-memorize');
+      if (memorizeBtn) {
         e.preventDefault();
-        const original = target.getAttribute('data-original');
-        const translation = target.getAttribute('data-translation');
-        const difficulty = target.getAttribute('data-difficulty') || 'B1';
-        await addToWhitelist(original, translation, difficulty);
-        restoreOriginal(target);
-        hideTooltip(); // 隐藏tooltip
+        e.stopPropagation();
+        const original = memorizeBtn.getAttribute('data-original');
+        const isActive = memorizeBtn.classList.contains('active');
+        
+        if (!isActive) {
+          addToMemorizeList(original);
+          memorizeBtn.classList.add('active');
+          memorizeBtn.title = '已在记忆列表';
+          // 更新图标为实心
+          memorizeBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="16" height="16">
+              <path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>
+            </svg>
+          `;
+        }
+        return;
+      }
+      
+      // 已学会按钮
+      const learnedBtn = e.target.closest('.vocabmeld-btn-learned');
+      if (learnedBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const original = learnedBtn.getAttribute('data-original');
+        const translation = learnedBtn.getAttribute('data-translation');
+        const difficulty = learnedBtn.getAttribute('data-difficulty') || 'B1';
+        
+        addToWhitelist(original, translation, difficulty);
+        restoreAllSameWord(original);
+        hideTooltip();
         showToast(`"${original}" 已标记为已学会`);
+        return;
       }
     });
 
@@ -1419,13 +1656,25 @@ ${uncached.join(', ')}
       }, 10);
     });
 
-    // 滚动处理（懒加载）
+    // 滚动处理（懒加载）- 使用 IntersectionObserver 时，滚动时重新观察新容器
     const handleScroll = debounce(() => {
       if (config?.autoProcess && config?.enabled) {
-        processPage(true);
+        observeTextContainers();
       }
-    }, 500);
+    }, 300);
     window.addEventListener('scroll', handleScroll, { passive: true });
+
+    // 监听 DOM 变化，观察新增的文本容器
+    const mutationObserver = new MutationObserver(debounce(() => {
+      if (config?.autoProcess && config?.enabled) {
+        observeTextContainers();
+      }
+    }, 500));
+    
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
 
     // 监听配置变化
     chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -1438,8 +1687,8 @@ ${uncached.join(', ')}
           if (changes.theme) {
             updateUITheme();
           }
-          // 难度、强度或样式变化时，需要重新处理页面
-          if (changes.difficultyLevel || changes.intensity || changes.translationStyle) {
+          // 难度、强度、样式或处理模式变化时，需要重新处理页面
+          if (changes.difficultyLevel || changes.intensity || changes.translationStyle || changes.processMode) {
             restoreAll(); // 先恢复页面（会清除 processedFingerprints）
             if (config.enabled) {
               processPage(); // 重新处理
@@ -1509,11 +1758,23 @@ ${uncached.join(', ')}
     createTooltip();
     createSelectionPopup();
     
+    // 初始化 IntersectionObserver
+    setupIntersectionObserver();
+    
     setupEventListeners();
     
-    // 自动处理 - 只有在 API 配置好且开启自动处理时才执行
-    if (config.autoProcess && config.enabled && config.apiKey) {
-      setTimeout(() => processPage(), 1000);
+    // 自动处理 - 使用 IntersectionObserver 懒加载
+    if (config.autoProcess && config.enabled && config.apiEndpoint) {
+      // 延迟启动，等待页面渲染完成
+      setTimeout(() => {
+        // 先处理记忆列表中的单词
+        const memorizeWords = (config.memorizeList || []).map(w => w.word).filter(w => w && w.trim());
+        if (memorizeWords.length > 0) {
+          processSpecificWords(memorizeWords).catch(console.error);
+        }
+        // 开始观察文本容器
+        observeTextContainers();
+      }, 500);
     }
     
   }
