@@ -212,7 +212,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
-        const data = await response.json();
+        const data = apiProtocol === 'openai_responses'
+          ? await parseResponsesApiResponse(response)
+          : await response.json();
         const normalizedData = apiProtocol === 'openai_responses'
           ? normalizeResponsesApiToChatCompletions(data)
           : data;
@@ -314,6 +316,159 @@ async function extractErrorMessageFromResponse(response) {
   }
 }
 
+function isEventStreamResponse(response) {
+  const contentType = response?.headers?.get('Content-Type') || '';
+  return typeof contentType === 'string' && contentType.toLowerCase().includes('text/event-stream');
+}
+
+async function parseResponsesApiResponse(response) {
+  if (isEventStreamResponse(response)) {
+    return readResponsesApiSse(response);
+  }
+  return response.json();
+}
+
+async function readResponsesApiSse(response) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    throw new Error('SSE 响应体为空');
+  }
+
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let currentEvent = '';
+  let dataLines = [];
+  const partsWithDelta = new Set();
+  let sawAnyDelta = false;
+  let outputText = '';
+  let completedResponse = null;
+  let errorMessage = '';
+  let shouldStop = false;
+
+  const flushEvent = () => {
+    const dataStr = dataLines.join('\n').trim();
+    const eventName = currentEvent;
+    currentEvent = '';
+    dataLines = [];
+
+    if (!dataStr) {
+      return;
+    }
+
+    if (dataStr === '[DONE]') {
+      shouldStop = true;
+      return;
+    }
+
+    let payload = null;
+    try {
+      payload = JSON.parse(dataStr);
+    } catch (e) {
+      payload = null;
+    }
+
+    const type = payload?.type;
+    const name = eventName || type || '';
+
+    if (name === 'response.output_text.delta') {
+      const delta = payload?.delta;
+      if (typeof delta === 'string') {
+        outputText += delta;
+        sawAnyDelta = true;
+        const key = `${payload?.item_id || ''}:${String(payload?.content_index ?? '')}`;
+        if (key !== ':') {
+          partsWithDelta.add(key);
+        }
+      }
+      return;
+    }
+
+    if (name === 'response.output_text.done') {
+      const text = payload?.text;
+      if (typeof text === 'string') {
+        const key = `${payload?.item_id || ''}:${String(payload?.content_index ?? '')}`;
+        const hasKey = key !== ':';
+        const seenDelta = hasKey ? partsWithDelta.has(key) : sawAnyDelta;
+        if (!seenDelta) {
+          outputText += text;
+        }
+      }
+      return;
+    }
+
+    if (name === 'response.completed') {
+      if (payload?.response && typeof payload.response === 'object') {
+        completedResponse = payload.response;
+      }
+      shouldStop = true;
+      return;
+    }
+
+    if (name === 'error') {
+      const err = payload?.error;
+      if (typeof err?.message === 'string' && err.message.trim()) {
+        errorMessage = err.message.trim();
+      } else if (typeof payload?.message === 'string' && payload.message.trim()) {
+        errorMessage = payload.message.trim();
+      } else {
+        errorMessage = 'SSE 返回 error 事件';
+      }
+      shouldStop = true;
+    }
+  };
+
+  while (!shouldStop) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let newlineIndex = buffer.indexOf('\n');
+    while (newlineIndex !== -1) {
+      let line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line.endsWith('\r')) {
+        line = line.slice(0, -1);
+      }
+
+      if (line === '') {
+        flushEvent();
+        if (shouldStop) {
+          break;
+        }
+        newlineIndex = buffer.indexOf('\n');
+        continue;
+      }
+
+      if (line.startsWith('event:')) {
+        currentEvent = line.slice(6).trim();
+        newlineIndex = buffer.indexOf('\n');
+        continue;
+      }
+
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trimStart());
+        newlineIndex = buffer.indexOf('\n');
+        continue;
+      }
+
+      newlineIndex = buffer.indexOf('\n');
+    }
+  }
+
+  flushEvent();
+
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+
+  const base = completedResponse && typeof completedResponse === 'object' ? completedResponse : {};
+  const text = outputText || extractResponsesApiText(base);
+  return { ...base, output_text: text };
+}
+
 // 测试 API 连接
 async function testApiConnection(endpoint, apiKey, model, apiProtocol = 'openai_compatible', reasoningEffort = '') {
   try {
@@ -346,7 +501,9 @@ async function testApiConnection(endpoint, apiKey, model, apiProtocol = 'openai_
       throw new Error(errorMessage || `HTTP ${response.status}`);
     }
     
-    const data = await response.json();
+    const data = apiProtocol === 'openai_responses'
+      ? await parseResponsesApiResponse(response)
+      : await response.json();
     if (apiProtocol === 'openai_responses') {
       const outputText = extractResponsesApiText(data);
       if (outputText) {
