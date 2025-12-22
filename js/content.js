@@ -770,7 +770,6 @@
 - translation: 翻译结果
 - phonetic: 学习语言(${config.targetLanguage})的音标/发音
 - difficulty: CEFR 难度等级 (A1/A2/B1/B2/C1/C2)，请谨慎评估
-- position: 在文本中的起始位置
 
 ## 文本：
 ${filteredText}
@@ -1223,6 +1222,9 @@ ${uncached.join(', ')}
     }
 
     intersectionObserver = new IntersectionObserver((entries) => {
+      // 检查站点规则
+      if (!config?.enabled || !shouldProcessSite()) return;
+      
       let hasNewVisible = false;
       
       for (const entry of entries) {
@@ -1243,7 +1245,7 @@ ${uncached.join(', ')}
       }
 
       // 有新可见容器时，触发处理
-      if (hasNewVisible && config?.enabled && !isProcessing) {
+      if (hasNewVisible && !isProcessing) {
         processPendingContainers();
       }
     }, {
@@ -1362,9 +1364,30 @@ ${uncached.join(', ')}
     return rect.bottom >= -margin && rect.top <= viewportHeight + margin;
   }
 
+  // 检查站点是否应该被处理
+  function shouldProcessSite() {
+    const hostname = window.location.hostname;
+    if (config.siteMode === 'all') {
+      // 所有网站模式：检查是否在排除列表中
+      if (config.excludedSites?.some(domain => hostname.includes(domain))) {
+        return false;
+      }
+    } else {
+      // 仅指定网站模式：检查是否在允许列表中
+      if (!config.allowedSites?.some(domain => hostname.includes(domain))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // 观察页面中的文本容器
   function observeTextContainers() {
     if (!intersectionObserver) return;
+    if (!config?.enabled) return;
+    
+    // 检查站点规则
+    if (!shouldProcessSite()) return;
     
     const containers = findTextContainers(document.body);
     let hasVisibleUnprocessed = false;
@@ -1390,7 +1413,7 @@ ${uncached.join(', ')}
     }
     
     // 如果有可见但未处理的容器，立即触发处理
-    if (hasVisibleUnprocessed && config?.enabled && !isProcessing) {
+    if (hasVisibleUnprocessed && !isProcessing) {
       processPendingContainers();
     }
   }
