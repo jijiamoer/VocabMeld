@@ -8,6 +8,7 @@
 - Content script: `js/content.js`（非 ES module，整合在 IIFE 内）
 - 配置：`chrome.storage.sync`
 - 缓存：`chrome.storage.local`
+- 段落缓存：`vocabmeld_segment_cache_v1`（词级缓存已弃用）
 
 ## 代码与协作约定
 - 代码与标识符：英文

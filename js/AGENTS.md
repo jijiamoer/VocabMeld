@@ -6,7 +6,7 @@ Chrome Extension 主要逻辑层，包含 background、content、popup、options
 |------|------|------|
 | `background.js` | 核心 | Service Worker，API 请求、消息路由 |
 | `content.js` | 核心 | 内容脚本，DOM 操作、词汇替换、段落级缓存（无词级缓存） |
-| `options.js` | 页面 | 设置页面逻辑 |
+| `options.js` | 页面 | 设置页面逻辑（词汇管理含翻译历史） |
 | `popup.js` | 页面 | 弹出窗口逻辑 |
 | `core/` | 子目录 | 配置与存储模块 |
 | `services/` | 子目录 | 服务层模块 |

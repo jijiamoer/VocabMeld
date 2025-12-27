@@ -1,4 +1,9 @@
 <!DOCTYPE html>
+<!--
+@input  设置页面 DOM 与用户交互
+@output 设置 UI 与词汇管理（含翻译历史）
+@pos    options.html 设置页面结构
+-->
 <html lang="zh-CN">
 
 <head>
@@ -739,7 +744,7 @@
         <div class="word-tabs">
           <button class="word-tab active" data-tab="learned">已学会</button>
           <button class="word-tab" data-tab="memorize">需记忆</button>
-          <button class="word-tab" data-tab="cached">已缓存</button>
+          <button class="word-tab" data-tab="cached">翻译历史</button>
         </div>
 
         <!-- 已学会页面的搜索和筛选 -->
@@ -790,7 +795,7 @@
           </div>
         </div>
 
-        <!-- 已缓存页面的搜索和筛选 -->
+        <!-- 翻译历史页面的搜索和筛选 -->
         <div class="word-filters hidden" id="cachedFilters" data-tab="cached">
           <div class="search-box">
             <input type="text" id="cachedSearchInput" placeholder="搜索单词或翻译..." class="search-input">

@@ -2,7 +2,7 @@
  * VocabMeld Options 脚本 - 自动保存版本
  * 
  * @input  chrome.storage 配置、用户表单输入
- * @output 配置保存、词汇管理、统计展示
+ * @output 配置保存、词汇管理（含翻译历史）、统计展示
  * @pos    设置页面逻辑，用户配置的入口
  * 
  * 一旦我被更新，务必更新我的开头注释，以及 js/AGENTS.md
@@ -1056,25 +1056,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     filterLearnedWords();
     filterMemorizeWords();
 
-    // 加载缓存
-    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
-      const cache = data.vocabmeld_word_cache || [];
-      const cacheWords = cache.map(item => {
-        const [word] = item.key.split(':');
-        return {
-          original: word,
-          word: item.translation,
-          addedAt: item.timestamp,
-          difficulty: item.difficulty || 'B1',
-          phonetic: item.phonetic || '',
-          cacheKey: item.key // 保存完整的缓存key用于删除
-        };
+    // 加载翻译历史（基于段落级缓存）
+    chrome.storage.local.get('vocabmeld_segment_cache_v1', (data) => {
+      const segmentCache = data.vocabmeld_segment_cache_v1 || {};
+
+      // 提取所有词汇
+      const allWords = [];
+      for (const cacheValue of Object.values(segmentCache)) {
+        if (!cacheValue || typeof cacheValue !== 'object') continue;
+
+        const savedAt = typeof cacheValue.savedAt === 'number' ? cacheValue.savedAt : Date.now();
+        const words = [
+          ...(Array.isArray(cacheValue.immediate) ? cacheValue.immediate : []),
+          ...(Array.isArray(cacheValue.async) ? cacheValue.async : [])
+        ];
+
+        words.forEach(word => {
+          if (!word || typeof word !== 'object') return;
+          const original = (word.original || '').trim();
+          if (!original) return;
+
+          allWords.push({
+            original,
+            word: word.translation || '',
+            difficulty: word.difficulty || 'B1',
+            phonetic: word.phonetic || '',
+            addedAt: savedAt
+          });
+        });
+      }
+
+      // 去重：同一个词保留最新的
+      const wordMap = new Map();
+      allWords.forEach(w => {
+        const key = (w.original || '').toLowerCase();
+        if (!key) return;
+        const existing = wordMap.get(key);
+        if (!existing || (existing.addedAt || 0) < (w.addedAt || 0)) {
+          wordMap.set(key, w);
+        }
       });
 
-      // 保存原始数据
-      allCachedWords = cacheWords;
+      // 转为数组并按时间倒序排序
+      const translationHistory = Array.from(wordMap.values())
+        .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
 
-      // 应用搜索和筛选
+      allCachedWords = translationHistory;
       filterCachedWords();
     });
   }
@@ -1097,7 +1124,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ${w.word ? `<span class="word-translation">${w.word}</span>` : ''}
         ${w.difficulty ? `<span class="word-difficulty difficulty-${w.difficulty.toLowerCase()}">${w.difficulty}</span>` : ''}
         <span class="word-date">${formatDate(w.addedAt)}</span>
-        ${type !== 'cached' ? `<button class="word-remove" data-word="${w.original}" data-type="${type}">&times;</button>` : `<button class="word-remove" data-key="${w.cacheKey || ''}" data-type="cached">&times;</button>`}
+        ${type !== 'cached' ? `<button class="word-remove" data-word="${w.original}" data-type="${type}">&times;</button>` : ''}
       </div>
     `).join('');
 
@@ -1136,14 +1163,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 删除单个缓存项
   function removeCacheItem(key) {
-    if (!key) return;
-    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
-      const cache = data.vocabmeld_word_cache || [];
-      const newCache = cache.filter(item => item.key !== key);
-      chrome.storage.local.set({ vocabmeld_word_cache: newCache }, () => {
-        loadSettings();
-      });
-    });
+    // 翻译历史基于段落缓存，不支持单独删除单词
+    // 用户可以通过“清空”按钮清空整个缓存
+    console.warn('[VocabMeld] 翻译历史不支持单独删除单词');
+    return;
   }
 
   // 发音功能
