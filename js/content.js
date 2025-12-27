@@ -907,6 +907,9 @@
       const cachedImmediate = Array.isArray(segmentCached.immediate) ? segmentCached.immediate.filter(filterReplacement) : [];
       const cachedAsync = Array.isArray(segmentCached.async) ? segmentCached.async.filter(filterReplacement) : [];
 
+      // 更新统计：缓存命中
+      updateStats({ cacheHits: 1 });
+
       return {
         immediate: cachedImmediate.slice(0, maxReplacements),
         async: cachedAsync.length ? Promise.resolve(cachedAsync) : null
@@ -1000,8 +1003,8 @@
             return true;
           });
 
-        // 更新统计（只统计新增词汇数；不再维护词级缓存命中/未命中）
-        updateStats({ newWords: filteredResults.length });
+        // 更新统计：缓存未命中，调用 API
+        updateStats({ cacheMisses: 1, newWords: filteredResults.length });
 
         const normalizedText = text.toLowerCase();
         const currentLearnedWords = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
