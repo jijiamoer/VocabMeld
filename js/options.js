@@ -1298,8 +1298,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const hitRate = total > 0 ? Math.round((hits / total) * 100) : 0;
     elements.statHitRate.textContent = hitRate + '%';
 
-    chrome.storage.local.get('vocabmeld_word_cache', (data) => {
-      const cacheSize = (data.vocabmeld_word_cache || []).length;
+
+    chrome.storage.local.get('vocabmeld_segment_cache_v1', (data) => {
+      const segmentCache = data.vocabmeld_segment_cache_v1 || [];
+      const cacheSize = segmentCache.length;  // 段落缓存条目数
       const checkedRadio = document.querySelector('input[name="cacheMaxSize"]:checked');
       const maxSize = checkedRadio ? parseInt(checkedRadio.value) : 2000;
       elements.statCacheSize.textContent = `${cacheSize}/${maxSize}`;
