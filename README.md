@@ -19,8 +19,34 @@
 
 ---
 
+> [!NOTE]
+> **🍴 Fork 声明**
 >
-> 为保证代码质量，本项目完全使用 **Claude Opus 4.5** 开发，价格非常昂贵。如果这个项目对你有帮助，欢迎在页面底部扫码打赏支持，你的支持是我继续更新的动力！⭐
+> 本项目 Fork 自 [lzskyline/VocabMeld](https://github.com/lzskyline/VocabMeld)，感谢原作者的出色工作！
+>
+> 本分支在原版基础上进行了一系列优化和增强，详见下方 [✨ 本分支改进](#-本分支改进)。
+
+---
+
+## 🔥 本分支改进
+
+相比原版，本分支进行了以下优化：
+
+### 架构优化
+- **段落级缓存**：移除冗余的词级缓存，统一使用段落级缓存，提升缓存命中率和一致性
+- **字符数批处理**：替代固定段落数分批，使用可配置的字符数（1000-10000）更合理地划分 API 请求
+- **XML 分隔符**：翻译请求使用 `<segment id="N">` 标签，消除 AI 理解歧义
+- **Prompt 优化**：统一 AI Prompt 格式，移除冗余 position 字段
+
+### 功能增强
+- **OpenAI Responses API**：完整支持 Responses API 协议，包括 `reasoning.effort` 推理强度配置
+- **最小文本长度**：可配置跳过短文本的阈值（50/100/200/500 字符）
+- **翻译历史**：从段落缓存提取词汇，展示历史翻译记录
+
+### 稳定性修复
+- **CORS 问题**：LLM 请求统一通过 background 代理，解决跨域限制
+- **SSE 流式响应**：兼容 Responses API 的 event-stream 格式
+- **缓存统计**：修复命中率显示，popup 正确读取段落缓存
 
 ---
 
@@ -117,17 +143,9 @@
 
 ---
 
-## ☕ 打赏
+## ⭐ 支持原项目
 
-本项目完全开源，如果对你有帮助，欢迎打赏支持！
-
-<p align="center">
-  <img src="assets/wechat.jpg" alt="微信打赏" width="300">
-</p>
-
----
-
-## 📈 Star History
+如果这个项目对你有帮助，请考虑给原项目 [lzskyline/VocabMeld](https://github.com/lzskyline/VocabMeld) 点个 Star 支持原作者！
 
 [![Star History Chart](https://api.star-history.com/svg?repos=lzskyline/VocabMeld&type=Date)](https://star-history.com/#lzskyline/VocabMeld&Date)
 

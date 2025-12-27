@@ -19,7 +19,34 @@
 
 ---
 
-> To ensure code quality, this project was developed entirely using **Claude Opus 4.5**, with API costs exceeding **$100+** so far. If you find this project helpful, please consider supporting via the donation link at the bottom. Your support keeps this project going! ⭐
+> [!NOTE]
+> **🍴 Fork Notice**
+>
+> This project is forked from [lzskyline/VocabMeld](https://github.com/lzskyline/VocabMeld). Thanks to the original author for the excellent work!
+>
+> This fork includes several optimizations and enhancements, see [🔥 Fork Improvements](#-fork-improvements) below.
+
+---
+
+## 🔥 Fork Improvements
+
+Compared to the original, this fork includes:
+
+### Architecture Optimization
+- **Segment-level Cache**: Removed redundant word-level cache, unified segment-level cache for better hit rate
+- **Character-based Batching**: Configurable character count (1000-10000) instead of fixed paragraph count for API requests
+- **XML Delimiters**: Translation requests use `<segment id="N">` tags to eliminate AI ambiguity
+- **Prompt Optimization**: Unified AI Prompt format, removed redundant position field
+
+### Feature Enhancements
+- **OpenAI Responses API**: Full support for Responses API protocol, including `reasoning.effort` configuration
+- **Minimum Text Length**: Configurable threshold to skip short text (50/100/200/500 characters)
+- **Translation History**: Extract vocabulary from segment cache, display historical translations
+
+### Stability Fixes
+- **CORS Issues**: LLM requests routed through background proxy
+- **SSE Streaming**: Compatible with Responses API event-stream format
+- **Cache Statistics**: Fixed hit rate display, popup correctly reads segment cache
 
 ---
 
@@ -116,17 +143,9 @@
 
 ---
 
-## ☕ Support
+## ⭐ Support the Original Project
 
-This project is fully open source, If it helps you, consider supporting!
-
-<p align="center">
-  <img src="assets/wechat.jpg" alt="WeChat Donation" width="300">
-</p>
-
----
-
-## 📈 Star History
+If you find this project helpful, please consider giving a Star to the original project [lzskyline/VocabMeld](https://github.com/lzskyline/VocabMeld) to support the original author!
 
 [![Star History Chart](https://api.star-history.com/svg?repos=lzskyline/VocabMeld&type=Date)](https://star-history.com/#lzskyline/VocabMeld&Date)
 
