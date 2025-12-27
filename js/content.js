@@ -1,6 +1,6 @@
 /**
  * VocabMeld 内容脚本
- * 注入到网页中，处理词汇替换和用户交互
+ * 注入到网页中，处理词汇替换、用户交互与段落级缓存复用（已移除词级缓存）
  * 
  * @input  网页 DOM、chrome.storage 配置、background.js API 响应
  * @output 词汇替换 DOM、tooltip、用户交互事件
@@ -73,7 +73,6 @@
   let config = null;
   let isProcessing = false;
   let processedFingerprints = new Set();
-  let wordCache = new Map();
   let tooltip = null;
   let selectionPopup = null;
   let intersectionObserver = null;
@@ -297,44 +296,133 @@
     }
   }
 
-  async function loadWordCache() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get('vocabmeld_word_cache', (result) => {
-        const cached = result.vocabmeld_word_cache;
-        if (cached && Array.isArray(cached)) {
-          cached.forEach(item => {
-            wordCache.set(item.key, {
-              translation: item.translation,
-              phonetic: item.phonetic,
-              difficulty: item.difficulty
-            });
-          });
+  // ============ 段落/请求级缓存（持久化 + Hash + LRU） ============
+  // 目标：当发送给 AI 的请求文本完全一致时，刷新页面可直接复用结果，避免重复调用 API。
+  const SEGMENT_CACHE_STORAGE_KEY = 'vocabmeld_segment_cache_v1';
+  const SEGMENT_CACHE_MAX_SIZE = 500;
+  let persistentSegmentCache = null;
+  let segmentCacheInitPromise = null;
+  let segmentPersistTimer = null;
+
+  // 生成文本 SHA256（hex）
+  async function generateSegmentHash(text) {
+    try {
+      const encoded = new TextEncoder().encode(text);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (error) {
+      // 极少数环境可能缺少 WebCrypto，降级为非加密 hash（仅用于避免重复调用）
+      console.warn('[VocabMeld] WebCrypto 不可用，段落缓存将降级为非 SHA256 key:', error);
+      let hash = 0;
+      for (let i = 0; i < text.length; i++) {
+        hash = ((hash << 5) - hash) + text.charCodeAt(i);
+        hash |= 0;
+      }
+      return `fallback_${hash.toString(16)}`;
+    }
+  }
+
+  async function loadSegmentCache() {
+    if (persistentSegmentCache) return;
+    if (segmentCacheInitPromise) return segmentCacheInitPromise;
+
+    segmentCacheInitPromise = new Promise((resolve) => {
+      chrome.storage.local.get(SEGMENT_CACHE_STORAGE_KEY, (result) => {
+        const raw = result?.[SEGMENT_CACHE_STORAGE_KEY];
+        persistentSegmentCache = new Map();
+
+        if (Array.isArray(raw)) {
+          for (const item of raw) {
+            if (item?.key) {
+              persistentSegmentCache.set(item.key, item.value ?? null);
+            }
+          }
         }
-        resolve(wordCache);
+
+        // 限制大小（LRU：Map 的遍历顺序就是从旧到新）
+        while (persistentSegmentCache.size > SEGMENT_CACHE_MAX_SIZE) {
+          const firstKey = persistentSegmentCache.keys().next().value;
+          persistentSegmentCache.delete(firstKey);
+        }
+
+        resolve();
+      });
+    });
+
+    return segmentCacheInitPromise;
+  }
+
+  async function saveSegmentCache() {
+    if (!persistentSegmentCache) return;
+
+    const data = [];
+    for (const [key, value] of persistentSegmentCache) {
+      data.push({ key, value });
+    }
+
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [SEGMENT_CACHE_STORAGE_KEY]: data }, () => {
+        if (chrome.runtime.lastError) {
+          const message = chrome.runtime.lastError?.message || '';
+          console.warn('[VocabMeld] 保存段落缓存失败:', chrome.runtime.lastError);
+
+          // 配额超限时，主动更激进淘汰后重试一次（避免缓存彻底失效）
+          if (message.toLowerCase().includes('quota') || message.toLowerCase().includes('exceed')) {
+            try {
+              while (persistentSegmentCache.size > Math.floor(SEGMENT_CACHE_MAX_SIZE * 0.6)) {
+                const firstKey = persistentSegmentCache.keys().next().value;
+                persistentSegmentCache.delete(firstKey);
+              }
+              const retryData = [];
+              for (const [key, value] of persistentSegmentCache) {
+                retryData.push({ key, value });
+              }
+              chrome.storage.local.set({ [SEGMENT_CACHE_STORAGE_KEY]: retryData }, () => resolve());
+              return;
+            } catch {
+              // 继续走 resolve，避免阻塞主流程
+            }
+          }
+        }
+        resolve();
       });
     });
   }
 
-  async function saveWordCache() {
-    // 使用 Map 确保 key 唯一（Map 本身不会有重复 key）
-    const data = [];
-    const seenKeys = new Set();
-    for (const [key, value] of wordCache) {
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        data.push({ key, ...value });
-      }
+  function scheduleSegmentCachePersist() {
+    if (segmentPersistTimer) clearTimeout(segmentPersistTimer);
+    segmentPersistTimer = setTimeout(() => {
+      segmentPersistTimer = null;
+      saveSegmentCache().catch(() => { });
+    }, 500);
+  }
+
+  async function getSegmentCacheValue(cacheKey) {
+    await loadSegmentCache();
+    if (!persistentSegmentCache?.has(cacheKey)) return undefined;
+
+    const value = persistentSegmentCache.get(cacheKey);
+    // LRU: 移动到末尾
+    persistentSegmentCache.delete(cacheKey);
+    persistentSegmentCache.set(cacheKey, value);
+    // 读取也会影响 LRU 顺序，延迟持久化
+    scheduleSegmentCachePersist();
+    return value;
+  }
+
+  async function setSegmentCacheValue(cacheKey, value) {
+    await loadSegmentCache();
+    if (!persistentSegmentCache) persistentSegmentCache = new Map();
+
+    if (persistentSegmentCache.has(cacheKey)) persistentSegmentCache.delete(cacheKey);
+    while (persistentSegmentCache.size >= SEGMENT_CACHE_MAX_SIZE) {
+      const firstKey = persistentSegmentCache.keys().next().value;
+      persistentSegmentCache.delete(firstKey);
     }
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ vocabmeld_word_cache: data }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('[VocabMeld] Failed to save cache:', chrome.runtime.lastError);
-          reject(chrome.runtime.lastError);
-        } else {
-          resolve();
-        }
-      });
-    });
+    persistentSegmentCache.set(cacheKey, value ?? null);
+    // 写入后尽快持久化（API 调用频率低，直接写更可靠）
+    await saveSegmentCache();
   }
 
   async function updateStats(stats) {
@@ -771,11 +859,6 @@
       throw new Error('API 未配置');
     }
 
-    // 确保缓存已加载
-    if (wordCache.size === 0) {
-      await loadWordCache();
-    }
-
     const detectedLang = detectLanguage(text);
     const isNative = isNativeLanguage(detectedLang, config.nativeLanguage);
 
@@ -794,142 +877,56 @@
     const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
     const maxReplacements = INTENSITY_CONFIG[config.intensity]?.maxPerParagraph || 8;
 
-    // 检查缓存 - 只检查有意义的词汇（排除常见停用词）
-    const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought', 'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'and', 'but', 'if', 'or', 'because', 'until', 'while', 'this', 'that', 'these', 'those', 'what', 'which', 'who', 'whom', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'its', 'our', 'their']);
+    // ============ 请求级缓存（段落级/合并请求级） ============
+    // Key 以“发送给 AI 的文本内容完全一致”为核心，同时绑定关键配置，避免配置变化导致复用错误结果。
+    // 命中后直接复用整次请求的翻译结果，跳过 API 调用，也避免词级缓存导致的词性误替换。
+    const segmentCacheKeyMaterial = JSON.stringify({
+      v: 1,
+      sourceLang,
+      targetLang,
+      modelName: config.modelName || '',
+      nativeLanguage: config.nativeLanguage,
+      targetLanguage: config.targetLanguage,
+      difficultyLevel: config.difficultyLevel,
+      intensity: config.intensity,
+      processMode: config.processMode,
+      text
+    });
+    const segmentCacheKey = await generateSegmentHash(segmentCacheKeyMaterial);
 
-    const words = (text.match(/\b[a-zA-Z]{5,}\b/g) || []).filter(w => !stopWords.has(w.toLowerCase()));
+    const segmentCached = await getSegmentCacheValue(segmentCacheKey);
+    if (segmentCached) {
+      const learnedWordsSet = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
+      const filterReplacement = (item) => {
+        if (!item?.original || !item?.translation) return false;
+        if (learnedWordsSet.has(item.original.toLowerCase())) return false;
+        return isDifficultyCompatible(item.difficulty || 'B1', config.difficultyLevel);
+      };
 
-    // 对于中文，提取有意义的短语（2-4个字符）
-    // 注意：这里只提取用于缓存检查，实际翻译由AI决定返回哪些词汇
-    // 提取2-4个字符的短语（避免提取过多无意义的片段）
-    const chinesePhrases = [];
-    const chineseText = text.match(/[\u4e00-\u9fff]+/g) || [];
+      const cachedImmediate = Array.isArray(segmentCached.immediate) ? segmentCached.immediate.filter(filterReplacement) : [];
+      const cachedAsync = Array.isArray(segmentCached.async) ? segmentCached.async.filter(filterReplacement) : [];
 
-    // 从中文文本中提取2-4个字符的短语（滑动窗口，步长为1）
-    for (const phrase of chineseText) {
-      if (phrase.length >= 2) {
-        // 提取2-4个字符的短语
-        for (let len = 2; len <= Math.min(4, phrase.length); len++) {
-          for (let i = 0; i <= phrase.length - len; i++) {
-            const subPhrase = phrase.substring(i, i + len);
-            chinesePhrases.push(subPhrase);
-          }
-        }
-      }
+      return {
+        immediate: cachedImmediate.slice(0, maxReplacements),
+        async: cachedAsync.length ? Promise.resolve(cachedAsync) : null
+      };
     }
 
-    const allWords = [...new Set([...words, ...chinesePhrases])];
+    // 重要：已完全移除“词级缓存”。
+    // 原因：词级缓存会忽略语境，同一个词在不同上下文会被复用同一翻译，造成错误替换。
+    // 现在仅保留“段落级缓存”；未命中时所有翻译都走异步 API（immediate 恒为空数组）。
+    const immediateResults = [];
 
-    const cached = [];
-    const uncached = [];
-    const cachedWordsSet = new Set(); // 用于去重
-
-    for (const word of allWords) {
-      const key = `${word.toLowerCase()}:${sourceLang}:${targetLang}`;
-      if (wordCache.has(key)) {
-        const lowerWord = word.toLowerCase();
-        if (!cachedWordsSet.has(lowerWord)) {
-          cached.push({ word, ...wordCache.get(key) });
-          cachedWordsSet.add(lowerWord);
-        }
-      } else {
-        uncached.push(word);
-      }
-    }
-
-    // 额外检查：检查文本中是否包含已缓存的词汇（用于处理AI返回的词汇与提取不一致的情况）
-    // 只检查中文词汇，因为英文词汇已经通过上面的逻辑检查了
-    const lowerText = text.toLowerCase();
-    for (const [key, value] of wordCache) {
-      const [cachedWord, cachedSourceLang, cachedTargetLang] = key.split(':');
-      // 只检查相同语言对的缓存，且只检查中文词汇（2个字符以上）
-      if (cachedSourceLang === sourceLang &&
-        cachedTargetLang === targetLang &&
-        /[\u4e00-\u9fff]/.test(cachedWord) &&
-        cachedWord.length >= 2) {
-        const lowerCachedWord = cachedWord.toLowerCase();
-        // 检查是否已经在cached列表中
-        if (!cachedWordsSet.has(lowerCachedWord)) {
-          // 检查文本中是否包含这个词汇（不区分大小写）
-          if (lowerText.includes(lowerCachedWord)) {
-            // 找到词汇在文本中的位置
-            const idx = text.toLowerCase().indexOf(lowerCachedWord);
-            if (idx >= 0) {
-              cached.push({
-                word: text.substring(idx, idx + cachedWord.length),
-                ...value
-              });
-              cachedWordsSet.add(lowerCachedWord);
-            }
-          }
-        }
-      }
-    }
-
-    // 获取已学会单词列表
-    const learnedWordsSet = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
-
-    // 过滤缓存结果（按难度，排除已学会单词）
-    const filteredCached = cached
-      .filter(c =>
-        isDifficultyCompatible(c.difficulty || 'B1', config.difficultyLevel) &&
-        !learnedWordsSet.has(c.word.toLowerCase())
-      )
-      .map(c => {
-        const idx = text.toLowerCase().indexOf(c.word.toLowerCase());
-        return {
-          original: c.word,
-          translation: c.translation,
-          phonetic: c.phonetic,
-          difficulty: c.difficulty,
-          position: idx >= 0 ? idx : 0,
-          fromCache: true
-        };
-      });
-
-    // 立即返回缓存结果（立即显示）
-    const immediateResults = filteredCached.slice(0, maxReplacements);
-
-    // 更新统计
-    if (immediateResults.length > 0) {
-      updateStats({ cacheHits: immediateResults.length, cacheMisses: 0 });
-    }
-
-    // 如果没有未缓存的词汇，直接返回缓存结果
-    if (uncached.length === 0) {
-      return { immediate: immediateResults, async: null };
-    }
-
-    // 构建只包含未缓存词汇的文本用于发送给 AI
-    const filteredText = reconstructTextWithWords(text, uncached);
-
-    // 判断是否需要限制异步替换数量
-    const cacheSatisfied = immediateResults.length >= maxReplacements;
-    const textTooShort = filteredText.trim().length < 50;
-
-    // 如果文本太短，不需要调用API
+    // 文本过短时直接跳过 API，避免无意义请求
+    const textTooShort = text.trim().length < 50;
     if (textTooShort) {
-      return { immediate: immediateResults, async: null };
+      return { immediate: [], async: null };
     }
 
-    // 计算还需要翻译的词汇数量
-    const remainingSlots = maxReplacements - immediateResults.length;
+    const maxAsyncReplacements = maxReplacements;
+    const aiTargetCount = Math.max(maxAsyncReplacements, Math.ceil(maxReplacements * 1.5));
 
-    // 如果缓存已满足配置，异步替换最多1个词；否则按剩余槽位计算
-    const maxAsyncReplacements = cacheSatisfied ? 1 : remainingSlots;
-
-    // 如果不需要异步替换，直接返回
-    if (maxAsyncReplacements <= 0) {
-      return { immediate: immediateResults, async: null };
-    }
-
-    // 动态计算AI应该返回的词汇数量（通常是配置值的1.5-2倍，让AI有选择空间）
-    // 但如果缓存已满足或文本极少，限制AI返回数量
-    const aiTargetCount = cacheSatisfied
-      ? 1
-      : Math.max(maxAsyncReplacements, Math.ceil(maxReplacements * 1.5));
-
-    // 异步调用 API，处理未缓存的词汇（不阻塞立即返回）
+    // 异步调用 API（不阻塞立即返回）
     const asyncPromise = (async () => {
       try {
         const prompt = `## 系统如何使用你的输出（非常重要）
@@ -957,8 +954,8 @@
 - original 尽量短且可替换：中文优先 2-4 字；英文优先 1 个词，必要时用很短的短语去保留语义。
 - 系统通常会过滤：中文 1 字、英文少于 5 个字母的纯英文单词；尽量不要返回这些以免浪费名额。
 
-## 文本
-${filteredText}
+	## 文本
+	${text}
 
 ## 输出
 只返回 JSON 数组（允许空数组 []），不要其他内容。`;
@@ -985,90 +982,51 @@ ${filteredText}
           if (jsonMatch) allResults = JSON.parse(jsonMatch[0]);
         }
 
-        // 先缓存所有词汇（包括所有难度级别），供不同难度设置的用户使用
-        // 过滤掉2字以下的中文词汇和小于5个字符的英文单词（避免简单词影响语境）
-        for (const item of allResults) {
-          // 对于中文，不存储1个字的内容（即只存储2个字及以上的词汇）
-          const isChinese = /[\u4e00-\u9fff]/.test(item.original);
-          if (isChinese && item.original.length < 2) {
-            continue; // 跳过1个字的中文词汇（只存储2个字及以上的）
-          }
-          // 对于英文，不存储小于5个字符的单词
-          const isEnglish = /^[a-zA-Z]+$/.test(item.original);
-          if (isEnglish && item.original.length < 5) {
-            continue; // 跳过小于5个字符的英文单词
-          }
-
-          const key = `${item.original.toLowerCase()}:${sourceLang}:${targetLang}`;
-          // 如果已存在，先删除（LRU）
-          if (wordCache.has(key)) {
-            wordCache.delete(key);
-          }
-
-          // 如果达到上限，删除最早的项
-          while (wordCache.size >= (config?.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE)) {
-            const firstKey = wordCache.keys().next().value;
-            wordCache.delete(firstKey);
-          }
-
-          // 添加新项
-          wordCache.set(key, {
-            translation: item.translation,
-            phonetic: item.phonetic || '',
-            difficulty: item.difficulty || 'B1'
+        // 词级缓存已移除：这里不再写入/读取单词缓存，只做本地过滤确保输出可用。
+        const filteredResults = allResults
+          .filter(item => item && typeof item.original === 'string' && typeof item.translation === 'string')
+          .map(item => ({
+            ...item,
+            original: item.original.trim(),
+            translation: item.translation.trim()
+          }))
+          .filter(item => item.original && item.translation)
+          .filter(item => isDifficultyCompatible(item.difficulty || 'B1', config.difficultyLevel))
+          .filter(item => {
+            const isEnglish = /^[a-zA-Z]+$/.test(item.original);
+            if (isEnglish && item.original.length < 5) return false;
+            return true;
           });
-        }
-        // 确保缓存保存完成
-        await saveWordCache();
 
-        // 本地过滤：只保留符合用户难度设置的词汇，并过滤掉小于5个字符的英文单词
-        const filteredResults = allResults.filter(item => {
-          // 过滤难度级别
-          if (!isDifficultyCompatible(item.difficulty || 'B1', config.difficultyLevel)) {
-            return false;
-          }
-          // 过滤小于5个字符的英文单词
-          const isEnglish = /^[a-zA-Z]+$/.test(item.original);
-          if (isEnglish && item.original.length < 5) {
-            return false;
-          }
-          return true;
-        });
+        // 更新统计（只统计新增词汇数；不再维护词级缓存命中/未命中）
+        updateStats({ newWords: filteredResults.length });
 
-        // 更新统计
-        updateStats({ newWords: filteredResults.length, cacheHits: cached.length, cacheMisses: 1 });
-
-        // 修正 AI 返回结果的位置（从过滤文本映射回原始文本）
-        const correctedResults = filteredResults.map(result => {
-          const originalIndex = text.toLowerCase().indexOf(result.original.toLowerCase());
-          return {
-            ...result,
-            position: originalIndex >= 0 ? originalIndex : result.position
-          };
-        });
-
-        // 合并缓存结果（去重，避免与已显示的缓存结果重复，排除已学会单词）
-        const immediateWords = new Set(immediateResults.map(r => r.original.toLowerCase()));
+        const normalizedText = text.toLowerCase();
         const currentLearnedWords = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
-        const cachedResults = cached
-          .filter(c =>
-            !immediateWords.has(c.word.toLowerCase()) &&
-            !correctedResults.some(r => r.original.toLowerCase() === c.word.toLowerCase()) &&
-            !currentLearnedWords.has(c.word.toLowerCase()) &&
-            isDifficultyCompatible(c.difficulty || 'B1', config.difficultyLevel)
-          )
-          .map(c => {
-            const idx = text.toLowerCase().indexOf(c.word.toLowerCase());
-            return { original: c.word, translation: c.translation, phonetic: c.phonetic, difficulty: c.difficulty, position: idx, fromCache: true };
-          });
+        const asyncResults = filteredResults
+          .map(result => {
+            const originalIndex = normalizedText.indexOf(result.original.toLowerCase());
+            if (originalIndex < 0) return null;
+            return {
+              original: result.original,
+              translation: result.translation,
+              phonetic: result.phonetic || '',
+              difficulty: result.difficulty || 'B1',
+              position: originalIndex
+            };
+          })
+          .filter(Boolean)
+          .filter(r => !currentLearnedWords.has(r.original.toLowerCase()))
+          .slice(0, maxAsyncReplacements);
 
-        // API 结果也要过滤已学会单词
-        const filteredCorrectedResults = correctedResults.filter(r => !currentLearnedWords.has(r.original.toLowerCase()));
+        // API 成功后缓存整次请求的结果（用于刷新/重复请求时直接复用，避免词性错误）
+        await setSegmentCacheValue(segmentCacheKey, {
+          immediate: immediateResults,
+          async: asyncResults,
+          savedAt: Date.now()
+        });
 
-        // 合并结果：补充的缓存结果 + API结果
-        // 限制异步替换数量（如果缓存已满足配置或文本极少，最多只替换1个词）
-        const mergedResults = [...cachedResults, ...filteredCorrectedResults];
-        return mergedResults.slice(0, maxAsyncReplacements);
+        return asyncResults;
 
       } catch (error) {
         console.error('[VocabMeld] Async API Error:', error);
@@ -1086,39 +1044,25 @@ ${filteredText}
       return [];
     }
 
-    const detectedLang = detectLanguage(targetWords.join(' '));
+    // 词级缓存已移除：这里始终对所有目标词汇走一次 API，并基于返回结果过滤。
+    const words = [];
+    const seen = new Set();
+    for (const rawWord of targetWords) {
+      const word = String(rawWord || '').trim();
+      if (!word) continue;
+      const key = word.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      words.push(word);
+    }
+    if (words.length === 0) return [];
+
+    const detectedLang = detectLanguage(words.join(' '));
     const isNative = isNativeLanguage(detectedLang, config.nativeLanguage);
     const sourceLang = isNative ? config.nativeLanguage : detectedLang;
     const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
-
-    const uncached = [];
-    const cached = [];
-
-    // 检查缓存（复用统一流程）
-    for (const word of targetWords) {
-      const key = `${word.toLowerCase()}:${sourceLang}:${targetLang}`;
-      if (wordCache.has(key)) {
-        // LRU: 访问时移到末尾（通过删除再添加实现）
-        const cachedItem = wordCache.get(key);
-        wordCache.delete(key);
-        wordCache.set(key, cachedItem);
-        cached.push({ word, ...cachedItem });
-      } else {
-        uncached.push(word);
-      }
-    }
-
-    let allResults = cached.map(c => ({
-      original: c.word,
-      translation: c.translation,
-      phonetic: c.phonetic,
-      difficulty: c.difficulty
-    }));
-
-    // 如果有未缓存的单词，调用API
-    if (uncached.length > 0) {
-      try {
-        const prompt = `## 任务
+    try {
+      const prompt = `## 任务
 翻译以下特定词汇，必须翻译所有提供的词汇，不要跳过。
 
 ## 翻译方向
@@ -1132,80 +1076,58 @@ ${sourceLang} → ${targetLang}
 - difficulty: string（可选）CEFR 等级：A1/A2/B1/B2/C1/C2
 
 ## 要翻译的词汇
-${uncached.join(', ')}
+${words.join(', ')}
 
 ## 输出
 只返回 JSON 数组，不要其他内容。`;
 
-        const data = await sendLlmRequest(
-          [
-            { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
-            { role: 'user', content: prompt }
-          ],
-          { temperature: 0.3, maxTokens: 1000 }
-        );
-        const content = data.choices?.[0]?.message?.content || '[]';
+      const data = await sendLlmRequest(
+        [
+          { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
+          { role: 'user', content: prompt }
+        ],
+        { temperature: 0.3, maxTokens: 1000 }
+      );
 
-        let apiResults = [];
-        try {
-          apiResults = JSON.parse(content);
-          if (!Array.isArray(apiResults)) {
-            const jsonMatch = content.match(/\[[\s\S]*\]/);
-            if (jsonMatch) apiResults = JSON.parse(jsonMatch[0]);
-          }
-        } catch (e) {
+      const content = data.choices?.[0]?.message?.content || '[]';
+
+      let apiResults = [];
+      try {
+        apiResults = JSON.parse(content);
+        if (!Array.isArray(apiResults)) {
           const jsonMatch = content.match(/\[[\s\S]*\]/);
           if (jsonMatch) apiResults = JSON.parse(jsonMatch[0]);
         }
-
-        // 缓存结果（复用统一流程，实现LRU淘汰）
-        // 过滤掉2字以下的中文词汇和小于5个字符的英文单词（避免简单词影响语境）
-        for (const item of apiResults) {
-          // 对于中文，不存储1个字的内容（即只存储2个字及以上的词汇）
-          const isChinese = /[\u4e00-\u9fff]/.test(item.original);
-          if (isChinese && item.original.length < 2) {
-            continue; // 跳过1个字的中文词汇（只存储2个字及以上的）
-          }
-          // 对于英文，不存储小于5个字符的单词
-          const isEnglish = /^[a-zA-Z]+$/.test(item.original);
-          if (isEnglish && item.original.length < 5) {
-            continue; // 跳过小于5个字符的英文单词
-          }
-
-          const key = `${item.original.toLowerCase()}:${sourceLang}:${targetLang}`;
-          // 如果已存在，先删除（LRU）
-          if (wordCache.has(key)) {
-            wordCache.delete(key);
-          }
-
-          // 如果达到上限，删除最早的项
-          while (wordCache.size >= (config?.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE)) {
-            const firstKey = wordCache.keys().next().value;
-            wordCache.delete(firstKey);
-          }
-
-          // 添加新项
-          wordCache.set(key, {
-            translation: item.translation,
-            phonetic: item.phonetic || '',
-            difficulty: item.difficulty || 'B1'
-          });
-        }
-        // 确保缓存保存完成
-        await saveWordCache();
-
-        allResults = [...allResults, ...apiResults];
-
-        // 更新统计
-        updateStats({ newWords: apiResults.length, cacheHits: cached.length, cacheMisses: 1 });
-
-      } catch (error) {
-        console.error('[VocabMeld] API Error for specific words:', error);
-        // 如果API失败，至少返回缓存的结果
+      } catch (e) {
+        const jsonMatch = content.match(/\[[\s\S]*\]/);
+        if (jsonMatch) apiResults = JSON.parse(jsonMatch[0]);
       }
-    }
 
-    return allResults.filter(item => targetWords.some(w => w.toLowerCase() === item.original.toLowerCase()));
+      const targetSet = new Set(words.map(w => w.toLowerCase()));
+      const results = (Array.isArray(apiResults) ? apiResults : [])
+        .filter(item => item && typeof item.original === 'string' && typeof item.translation === 'string')
+        .map(item => ({
+          original: item.original.trim(),
+          translation: item.translation.trim(),
+          phonetic: item.phonetic || '',
+          difficulty: item.difficulty || 'B1'
+        }))
+        .filter(item => item.original && item.translation)
+        .filter(item => targetSet.has(item.original.toLowerCase()));
+
+      if (results.length !== words.length) {
+        console.warn('[VocabMeld] 特定词汇翻译返回数量与请求不一致，已按返回结果应用。', {
+          requested: words.length,
+          returned: results.length
+        });
+      }
+
+      updateStats({ newWords: results.length });
+      return results;
+    } catch (error) {
+      console.error('[VocabMeld] API Error for specific words:', error);
+      return [];
+    }
   }
 
   // 根据上下文重新翻译单词
@@ -1289,18 +1211,7 @@ ${sourceLang} → ${targetLang}
         showToast('翻译失败');
         return;
       }
-
-      // 更新翻译缓存（先删除旧的，再写入新的）
-      const key = `${originalWord.toLowerCase()}:${sourceLang}:${targetLang}`;
-      if (wordCache.has(key)) {
-        wordCache.delete(key);
-      }
-      wordCache.set(key, {
-        translation: result.translation,
-        phonetic: result.phonetic || '',
-        difficulty: result.difficulty || 'B1'
-      });
-      await saveWordCache();
+      // 词级缓存已移除：这里不再写入单词缓存，仅更新页面显示与词典缓存。
 
       // 清除旧的词典缓存并重新获取
       const dictionaryType = config.dictionaryType || 'zh-en';
@@ -1746,11 +1657,6 @@ ${sourceLang} → ${targetLang}
       if (!config.allowedSites?.some(domain => hostname.includes(domain))) {
         return { processed: 0, excluded: true };
       }
-    }
-
-    // 确保缓存已加载
-    if (wordCache.size === 0) {
-      await loadWordCache();
     }
 
     // 处理记忆列表中的单词
@@ -2558,8 +2464,6 @@ ${sourceLang} → ${targetLang}
   // ============ 初始化 ============
   async function init() {
     await loadConfig();
-    await loadWordCache();
-
 
     createTooltip();
     createSelectionPopup();
