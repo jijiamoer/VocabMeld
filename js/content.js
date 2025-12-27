@@ -1267,30 +1267,13 @@ ${sourceLang} → ${targetLang}
 ## 输出
 只返回 JSON 对象，不要其他内容。`;
 
-      const apiResponse = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({
-          action: 'apiRequest',
-          endpoint: config.apiEndpoint,
-          apiKey: config.apiKey,
-          body: {
-            model: config.modelName,
-            messages: [
-              { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
-              { role: 'user', content: prompt }
-            ],
-            temperature: 0.3,
-            max_tokens: 500
-          }
-        }, response => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-          } else if (!response?.success) {
-            reject(new Error(response?.error || 'API request failed'));
-          } else {
-            resolve(response.data);
-          }
-        });
-      });
+      const apiResponse = await sendLlmRequest(
+        [
+          { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
+          { role: 'user', content: prompt }
+        ],
+        { temperature: 0.3, maxTokens: 500 }
+      );
 
       const content = apiResponse.choices?.[0]?.message?.content || '';
       let result = null;
