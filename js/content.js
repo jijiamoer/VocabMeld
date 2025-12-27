@@ -194,6 +194,7 @@
             showAddMemorize: syncResult.showAddMemorize ?? true,
             cacheMaxSize: syncResult.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE,
             minTextLength: syncResult.minTextLength ?? 15,
+            maxBatchChars: syncResult.maxBatchChars ?? 3000,
             translationStyle: syncResult.translationStyle || 'translation-original',
             theme: syncResult.theme || 'dark',
             enabled: syncResult.enabled ?? true,
@@ -855,7 +856,7 @@
     });
   }
 
-  async function translateText(text) {
+  async function translateText(text, batchSize = 1) {
     if (!config.apiEndpoint) {
       throw new Error('API 未配置');
     }
@@ -931,17 +932,34 @@
     const maxAsyncReplacements = maxReplacements;
     const aiTargetCount = Math.max(maxAsyncReplacements, Math.ceil(maxReplacements * 1.5));
 
+    // 根据段落数调整总目标数量（每段约 aiTargetCount 个词）
+    const totalTargetCount = aiTargetCount * batchSize;
+    const maxTotalCount = maxReplacements * 2 * batchSize;
+    const perSegmentSuggestion = batchSize > 1 ? Math.ceil(aiTargetCount / batchSize) : aiTargetCount;
+
     // 异步调用 API（不阻塞立即返回）
     const asyncPromise = (async () => {
       try {
+        // 根据是否为批量处理调整 Prompt
+        const batchInfo = batchSize > 1
+          ? `
+## 文本结构（重要）
+下面的文本包含 ${batchSize} 个段落，每个段落用 <segment id="N"> 标签标记。
+请尽量从每个段落中选择值得学习的词汇，确保分布相对均衡。`
+          : '';
+
+        const targetInfo = batchSize > 1
+          ? `- 总共返回 0..${maxTotalCount} 条，建议每个段落 ${perSegmentSuggestion} 条左右。`
+          : `- 返回 0..${maxTotalCount} 条，目标约 ${totalTargetCount} 条。`;
+
         const prompt = `## 系统如何使用你的输出（非常重要）
 - 插件会用 original 在原文中做字符串匹配（大小写不敏感），然后把该片段替换显示为：translation(original)。
 - 如果 original 不能在原文中精确找到（差一个字符/空格/标点也不行），这条结果完全无效。
 - translation 会直接展示在网页上：越短越好，不要解释，不要多义/列举。
-
+${batchInfo}
 ## 任务（N+1）
 从下面文本中选择少量最值得学习的词/短语并翻译。
-- 返回 0..${maxReplacements * 2} 条，目标约 ${aiTargetCount} 条。
+${targetInfo}
 - 翻译方向：${sourceLang} → ${targetLang}。
 - **考虑用户的水平，如果文本内容过于基础或没有值得学习的词汇，请返回空数组 []，不要为了凑数而翻译简单词汇。**
 
@@ -1418,8 +1436,7 @@ ${sourceLang} → ${targetLang}
   }
 
   // ============ 页面处理 ============
-  const MAX_SEGMENTS_PER_REQUEST = 5; // 每个API请求处理的最大段落数
-  const REQUEST_INTERVAL_MS = 1000; // API请求间隔（毫秒），避免触发速率限制
+  const REQUEST_INTERVAL_MS = 2000; // API请求间隔（毫秒），避免触发速率限制
 
   // 使用 IntersectionObserver 实现懒加载
   function setupIntersectionObserver() {
@@ -1503,15 +1520,30 @@ ${sourceLang} → ${targetLang}
         }
       }
 
-      // 合并多个段落为一个请求，减少API调用次数
-      for (let i = 0; i < segments.length; i += MAX_SEGMENTS_PER_REQUEST) {
-        const batch = segments.slice(i, i + MAX_SEGMENTS_PER_REQUEST);
-        await processBatchSegments(batch, whitelistWords);
+      // 根据字符数动态分批，而非固定段落数
+      const maxBatchChars = config.maxBatchChars || 3000;
+      let currentBatch = [];
+      let currentChars = 0;
 
-        // 添加请求间隔，避免触发API速率限制
-        if (i + MAX_SEGMENTS_PER_REQUEST < segments.length) {
+      for (const segment of segments) {
+        const segmentLength = segment.filteredText.length;
+
+        // 如果加上当前段落会超限，先发送当前batch
+        if (currentChars + segmentLength > maxBatchChars && currentBatch.length > 0) {
+          await processBatchSegments(currentBatch, whitelistWords);
           await new Promise(resolve => setTimeout(resolve, REQUEST_INTERVAL_MS));
+          currentBatch = [];
+          currentChars = 0;
         }
+
+        // 将当前段落加入batch
+        currentBatch.push(segment);
+        currentChars += segmentLength;
+      }
+
+      // 处理最后一批
+      if (currentBatch.length > 0) {
+        await processBatchSegments(currentBatch, whitelistWords);
       }
     } finally {
       isProcessing = false;
@@ -1527,11 +1559,13 @@ ${sourceLang} → ${targetLang}
   async function processBatchSegments(segments, whitelistWords) {
     if (segments.length === 0) return;
 
-    // 合并所有段落的文本，用分隔符隔开
-    const combinedText = segments.map(s => s.filteredText).join('\n\n---\n\n');
+    // 使用 XML 标签分隔段落，消除 AI 理解歧义
+    const combinedText = segments
+      .map((s, index) => `<segment id="${index + 1}">\n${s.filteredText}\n</segment>`)
+      .join('\n\n');
 
     try {
-      const result = await translateText(combinedText);
+      const result = await translateText(combinedText, segments.length);
 
       // 将翻译结果分配给各个段落
       const allReplacements = [...(result.immediate || [])];

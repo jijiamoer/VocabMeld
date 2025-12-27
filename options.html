@@ -486,6 +486,51 @@
         </div>
 
         <div class="form-group">
+          <label>每批最大字符数</label>
+          <p class="help-text">控制每次 API 请求处理的最大正文字符数，较小的值可降低并发压力</p>
+          <div class="cache-selector">
+            <label class="cache-option">
+              <input type="radio" name="maxBatchChars" value="1000">
+              <span class="cache-card">
+                <span class="cache-size">1000</span>
+                <span class="cache-desc">保守</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="maxBatchChars" value="2000">
+              <span class="cache-card">
+                <span class="cache-size">2000</span>
+                <span class="cache-desc">平衡</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="maxBatchChars" value="3000" checked>
+              <span class="cache-card">
+                <span class="cache-size">3000</span>
+                <span class="cache-desc">推荐 · 默认</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="maxBatchChars" value="5000">
+              <span class="cache-card">
+                <span class="cache-size">5000</span>
+                <span class="cache-desc">激进</span>
+              </span>
+            </label>
+            <label class="cache-option">
+              <input type="radio" name="maxBatchChars" value="custom">
+              <span class="cache-card cache-card-custom">
+                <span class="cache-size cache-size-input">
+                  <input type="number" id="customMaxBatchChars" min="500" max="10000" step="100" value="3000"
+                    placeholder="3000">
+                </span>
+                <span class="cache-desc">自定义</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
           <label>翻译显示样式</label>
           <p class="help-text">选择翻译词汇在页面上的显示方式</p>
           <div class="style-selector">

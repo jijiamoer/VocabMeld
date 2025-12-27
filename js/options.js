@@ -956,6 +956,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         radio.checked = parseInt(radio.value) === minTextLength;
       });
 
+      // 加载每批最大字符数（支持自定义）
+      const maxBatchChars = result.maxBatchChars ?? 3000;
+      const maxBatchCharsRadios = document.querySelectorAll('input[name="maxBatchChars"]');
+      const customMaxBatchCharsInput = document.getElementById('customMaxBatchChars');
+      let matchedPreset = false;
+      maxBatchCharsRadios.forEach(radio => {
+        if (radio.value === 'custom') {
+          return;
+        }
+        if (parseInt(radio.value) === maxBatchChars) {
+          radio.checked = true;
+          matchedPreset = true;
+        }
+      });
+      if (!matchedPreset) {
+        // 如果是自定义值，选中自定义选项
+        document.querySelector('input[name="maxBatchChars"][value="custom"]').checked = true;
+        customMaxBatchCharsInput.value = maxBatchChars;
+      } else {
+        customMaxBatchCharsInput.value = 3000;  // 重置为默认值
+      }
+
       const translationStyle = result.translationStyle || 'translation-original';
       elements.translationStyleRadios.forEach(radio => {
         radio.checked = radio.value === translationStyle;
@@ -1329,6 +1351,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       showAddMemorize: elements.showAddMemorize.checked,
       cacheMaxSize: parseInt(document.querySelector('input[name="cacheMaxSize"]:checked').value),
       minTextLength: parseInt(document.querySelector('input[name="minTextLength"]:checked')?.value ?? 15),
+      maxBatchChars: (() => {
+        const selectedRadio = document.querySelector('input[name="maxBatchChars"]:checked');
+        if (selectedRadio?.value === 'custom') {
+          return parseInt(document.getElementById('customMaxBatchChars').value) || 3000;
+        }
+        return parseInt(selectedRadio?.value) || 3000;
+      })(),
       translationStyle: document.querySelector('input[name="translationStyle"]:checked').value,
       ttsVoice: elements.ttsVoice.value,
       ttsRate: parseFloat(elements.ttsRate.value),
@@ -1392,6 +1421,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelectorAll('input[name="minTextLength"]').forEach(radio => {
       radio.addEventListener('change', () => debouncedSave(200));
     });
+
+    // 每批最大字符数 - 改变时保存
+    document.querySelectorAll('input[name="maxBatchChars"]').forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
+    // 自定义字符数输入框
+    document.getElementById('customMaxBatchChars').addEventListener('input', () => debouncedSave(500));
 
     // 站点模式切换
     elements.siteModeRadios.forEach(radio => {
