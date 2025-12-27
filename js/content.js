@@ -936,20 +936,20 @@
 - 插件会用 original 在原文中做字符串匹配（大小写不敏感），然后把该片段替换显示为：translation(original)。
 - 如果 original 不能在原文中精确找到（差一个字符/空格/标点也不行），这条结果完全无效。
 - translation 会直接展示在网页上：越短越好，不要解释，不要多义/列举。
-- position 字段仅用于输出结构兼容：系统会自动重新计算真实位置。请始终输出 position: 0（固定值，不要计算）。
 
 ## 任务（N+1）
-从下面文本中选择少量最值得学习的词/短语并翻译（可返回 0 条；不要为了凑数）。
+从下面文本中选择少量最值得学习的词/短语并翻译。
 - 返回 0..${maxReplacements * 2} 条，目标约 ${aiTargetCount} 条。
-- 翻译方向：${sourceLang} -> ${targetLang}。
+- 翻译方向：${sourceLang} → ${targetLang}。
+- **考虑用户的水平，如果文本内容过于基础或没有值得学习的词汇，请返回空数组 []，不要为了凑数而翻译简单词汇。**
 
 ## 必须遵守（硬约束）
 1) 只输出 JSON 数组。
 2) 每个元素是对象，字段与类型：
-   - original: string（必填）必须是原文中连续子串；不要改写、不要补词、不要纠错。
-   - translation: string（必填）可直接替换显示；尽量短；只给唯一最贴合上下文的释义；不要括号/斜杠/分号等。
-   - phonetic: string（可选，可为空字符串）学习语言(${config.targetLanguage})的音标/发音
-   - difficulty: string（可选，可为空字符串；如给出只能是 A1/A2/B1/B2/C1/C2）
+   - original: string（必填）原文中的连续子串，不要改写、补词或纠错
+   - translation: string（必填）翻译结果，尽量简短，只给最贴合上下文的释义
+   - phonetic: string（可选）目标语言(${config.targetLanguage})的音标/发音
+   - difficulty: string（可选）CEFR 等级：A1/A2/B1/B2/C1/C2
 3) 不要选择：URL/域名/邮箱、代码、纯数字/日期/型号、明显的人名地名组织名产品名、已经是目标语言且学习价值低的内容。
 
 ## 选择偏好（软偏好）
@@ -965,7 +965,7 @@ ${filteredText}
 
         const data = await sendLlmRequest(
           [
-            { role: 'system', content: '你是 VocabMeld 的词汇替换引擎与语言学习助手。你必须只输出可被 JSON.parse 解析的 JSON 数组（允许空数组 []），不要输出任何额外文本。' },
+            { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
             { role: 'user', content: prompt }
           ],
           { temperature: 0.3, maxTokens: 2000 }
@@ -1118,30 +1118,28 @@ ${filteredText}
     // 如果有未缓存的单词，调用API
     if (uncached.length > 0) {
       try {
-        const prompt = `你是一个语言学习助手。请翻译以下特定词汇。
+        const prompt = `## 任务
+翻译以下特定词汇，必须翻译所有提供的词汇，不要跳过。
 
-## 规则：
-1. 必须翻译所有提供的词汇，不要跳过任何词
-2. 如果单词是${sourceLang}，则翻译到${targetLang}，反之亦然
+## 翻译方向
+${sourceLang} → ${targetLang}
 
-## CEFR等级从简单到复杂依次为：A1-C2
-
-## 输出格式：
+## 输出格式
 返回 JSON 数组，每个元素包含：
-- original: 原词
-- translation: 翻译结果
-- phonetic: 学习语言(${config.targetLanguage})的音标/发音
-- difficulty: CEFR 难度等级 (A1/A2/B1/B2/C1/C2)
+- original: string（必填）原词
+- translation: string（必填）翻译结果，尽量简短
+- phonetic: string（可选）目标语言(${config.targetLanguage})的音标/发音
+- difficulty: string（可选）CEFR 等级：A1/A2/B1/B2/C1/C2
 
-## 要翻译的词汇：
+## 要翻译的词汇
 ${uncached.join(', ')}
 
-## 输出：
+## 输出
 只返回 JSON 数组，不要其他内容。`;
 
         const data = await sendLlmRequest(
           [
-            { role: 'system', content: '你是一个专业的语言学习助手。始终返回有效的 JSON 格式。' },
+            { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
             { role: 'user', content: prompt }
           ],
           { temperature: 0.3, maxTokens: 1000 }
@@ -1247,29 +1245,27 @@ ${uncached.join(', ')}
     const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
 
     try {
-      const prompt = `你是一个语言学习助手。请根据上下文语境翻译单词。
+      const prompt = `## 任务
+根据上下文语境翻译单词，确定正确的含义和词性。
 
-## 上下文句子：
+## 上下文句子
 "${contextSentence}"
 
-## 需要翻译的单词：
+## 需要翻译的单词
 ${originalWord}
 
-## 规则：
-1. 根据上下文确定单词的正确含义和词性
-2. 翻译方向：${sourceLang} → ${targetLang}
-3. 翻译结果应符合上下文语境
+## 翻译方向
+${sourceLang} → ${targetLang}
 
-## 输出格式：
+## 输出格式
 返回单个 JSON 对象：
-{
-  "original": "原词",
-  "translation": "根据上下文的正确翻译",
-  "phonetic": "学习语言(${config.targetLanguage})的音标",
-  "difficulty": "CEFR等级"
-}
+- original: string（必填）原词
+- translation: string（必填）根据上下文的正确翻译，尽量简短
+- phonetic: string（可选）目标语言(${config.targetLanguage})的音标/发音
+- difficulty: string（可选）CEFR 等级：A1/A2/B1/B2/C1/C2
 
-只返回 JSON，不要其他内容。`;
+## 输出
+只返回 JSON 对象，不要其他内容。`;
 
       const apiResponse = await new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({
@@ -1279,7 +1275,7 @@ ${originalWord}
           body: {
             model: config.modelName,
             messages: [
-              { role: 'system', content: '你是一个专业的语言学习助手。始终返回有效的 JSON 格式。' },
+              { role: 'system', content: '你是 VocabMeld 的词汇翻译助手。始终返回可被 JSON.parse 解析的 JSON，不要输出任何额外文本。' },
               { role: 'user', content: prompt }
             ],
             temperature: 0.3,
