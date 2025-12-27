@@ -1,5 +1,11 @@
 /**
  * VocabMeld Options 脚本 - 自动保存版本
+ * 
+ * @input  chrome.storage 配置、用户表单输入
+ * @output 配置保存、词汇管理、统计展示
+ * @pos    设置页面逻辑，用户配置的入口
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/AGENTS.md
  */
 
 document.addEventListener('DOMContentLoaded', async () => {

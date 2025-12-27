@@ -1,6 +1,12 @@
 /**
  * VocabMeld 内容脚本
  * 注入到网页中，处理词汇替换和用户交互
+ * 
+ * @input  网页 DOM、chrome.storage 配置、background.js API 响应
+ * @output 词汇替换 DOM、tooltip、用户交互事件
+ * @pos    内容脚本核心，DOM 操作与翻译逻辑的主战场
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/AGENTS.md
  */
 
 // 由于 content script 不支持 ES modules，我们需要将所有代码整合

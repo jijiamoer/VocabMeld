@@ -1,6 +1,12 @@
 /**
  * VocabMeld 构建脚本
  * 生成不同尺寸的图标
+ * 
+ * @input  无外部依赖
+ * @output icons/generate_icons.html 图标生成器
+ * @pos    构建工具，用于生成扩展图标资源
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 scripts/AGENTS.md
  */
 
 const fs = require('fs');

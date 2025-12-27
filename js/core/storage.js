@@ -1,6 +1,12 @@
 /**
  * VocabMeld 存储服务模块
  * 封装 Chrome Storage API，提供统一的存储接口
+ * 
+ * @input  config.js（默认值）、chrome.storage API
+ * @output StorageService 类，读写配置、词汇列表、统计数据
+ * @pos    基础层，存储抽象，被 cache-service 等依赖
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/core/AGENTS.md
  */
 
 import { DEFAULT_CONFIG } from './config.js';
@@ -111,7 +117,7 @@ class StorageService {
   async updateStats(stats) {
     const current = await this.get(['totalWords', 'todayWords', 'lastResetDate', 'cacheHits', 'cacheMisses']);
     const today = new Date().toISOString().split('T')[0];
-    
+
     // 检查是否需要重置今日统计
     if (current.lastResetDate !== today) {
       current.todayWords = 0;

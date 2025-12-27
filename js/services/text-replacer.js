@@ -1,6 +1,12 @@
 /**
  * VocabMeld 文本替换器模块
  * 使用 Range API 精确替换文本节点
+ * 
+ * @input  storage.js（白名单）、翻译结果、网页 DOM
+ * @output TextReplacer 类，DOM 替换、恢复原文、标记已学
+ * @pos    服务层，翻译结果的最终落地执行者
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/services/AGENTS.md
  */
 
 import { storage } from '../core/storage.js';
@@ -32,7 +38,7 @@ class TextReplacer {
 
     for (const replacement of sortedReplacements) {
       const { original, translation, phonetic, difficulty } = replacement;
-      
+
       // 在文本节点中查找原词
       for (const textNode of textNodes) {
         if (this.replaceInTextNode(textNode, original, translation, phonetic, difficulty)) {
@@ -84,17 +90,17 @@ class TextReplacer {
    */
   replaceInTextNode(textNode, original, translation, phonetic, difficulty) {
     const text = textNode.textContent;
-    
+
     // 创建正则表达式匹配原词（支持词边界）
     const escapedOriginal = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`(^|[\\s，。、；：""''（）\\[\\]【】])${escapedOriginal}([\\s，。、；：""''（）\\[\\]【】]|$)`, 'i');
-    
+
     const match = regex.exec(text);
     if (!match) {
       // 尝试不带边界的匹配（针对中文）
       const simpleIndex = text.indexOf(original);
       if (simpleIndex === -1) return false;
-      
+
       return this.performReplacement(textNode, simpleIndex, original, translation, phonetic, difficulty);
     }
 
@@ -153,10 +159,10 @@ class TextReplacer {
     wrapper.setAttribute('data-translation', translation);
     wrapper.setAttribute('data-phonetic', phonetic || '');
     wrapper.setAttribute('data-difficulty', difficulty || 'B1');
-    
+
     // 显示格式: translated(original)
     wrapper.innerHTML = `<span class="vocabmeld-word">${translation}</span><span class="vocabmeld-original">(${original})</span>`;
-    
+
     return wrapper;
   }
 
@@ -181,7 +187,7 @@ class TextReplacer {
   restoreAll(root = document.body) {
     const elements = root.querySelectorAll('.vocabmeld-translated');
     elements.forEach(el => this.restoreOriginal(el));
-    
+
     // 清除处理标记
     root.querySelectorAll('[data-vocabmeld-processed]').forEach(el => {
       el.removeAttribute('data-vocabmeld-processed');

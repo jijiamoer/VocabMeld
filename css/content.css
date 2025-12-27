@@ -1,3 +1,13 @@
+/**
+ * VocabMeld Content 样式 - 注入到页面中
+ * 
+ * @input  content.js 动态注入的类名
+ * @output 词汇标注样式、tooltip、toast、主题适配
+ * @pos    样式层，定义内容脚本的视觉呈现
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 css/AGENTS.md
+ */
+
 /* VocabMeld Content 样式 - 注入到页面中 */
 
 /* 动画定义 */

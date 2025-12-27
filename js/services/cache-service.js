@@ -1,6 +1,12 @@
 /**
  * VocabMeld 缓存服务模块
  * 实现热词缓存系统，支持 LRU 淘汰策略
+ * 
+ * @input  config.js（缓存配置）、storage.js（持久化）
+ * @output CacheService 类，词汇缓存读写、LRU 淘汰
+ * @pos    服务层，减少 API 调用，加速翻译响应
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/services/AGENTS.md
  */
 
 import { CACHE_CONFIG } from '../core/config.js';
@@ -29,7 +35,7 @@ class CacheService {
       try {
         const data = await storage.getLocal(CACHE_CONFIG.storageKey);
         const cached = data[CACHE_CONFIG.storageKey];
-        
+
         if (cached && Array.isArray(cached)) {
           // 恢复缓存，按添加顺序
           cached.forEach(item => {
@@ -41,7 +47,7 @@ class CacheService {
             });
           });
         }
-        
+
         this.initialized = true;
         console.log(`[VocabMeld] Cache initialized with ${this.cache.size} items`);
       } catch (error) {
@@ -74,14 +80,14 @@ class CacheService {
   get(word, sourceLang, targetLang) {
     const key = this.generateKey(word, sourceLang, targetLang);
     const item = this.cache.get(key);
-    
+
     if (item) {
       // LRU: 将访问的项移到末尾
       this.cache.delete(key);
       this.cache.set(key, item);
       return item;
     }
-    
+
     return null;
   }
 
@@ -95,18 +101,18 @@ class CacheService {
    */
   async set(word, sourceLang, targetLang, data) {
     const key = this.generateKey(word, sourceLang, targetLang);
-    
+
     // 如果已存在，先删除（LRU）
     if (this.cache.has(key)) {
       this.cache.delete(key);
     }
-    
+
     // 如果达到上限，删除最早的项
     while (this.cache.size >= this.maxSize) {
       const firstKey = this.cache.keys().next().value;
       this.cache.delete(firstKey);
     }
-    
+
     // 添加新项
     this.cache.set(key, {
       translation: data.translation,
@@ -114,7 +120,7 @@ class CacheService {
       difficulty: data.difficulty || 'B1',
       timestamp: Date.now()
     });
-    
+
     // 异步持久化
     this.persist();
   }
@@ -127,16 +133,16 @@ class CacheService {
   async setMany(items) {
     for (const item of items) {
       const key = this.generateKey(item.word, item.sourceLang, item.targetLang);
-      
+
       if (this.cache.has(key)) {
         this.cache.delete(key);
       }
-      
+
       while (this.cache.size >= this.maxSize) {
         const firstKey = this.cache.keys().next().value;
         this.cache.delete(firstKey);
       }
-      
+
       this.cache.set(key, {
         translation: item.translation,
         phonetic: item.phonetic || '',
@@ -144,7 +150,7 @@ class CacheService {
         timestamp: Date.now()
       });
     }
-    
+
     await this.persist();
   }
 
@@ -158,7 +164,7 @@ class CacheService {
   checkWords(words, sourceLang, targetLang) {
     const cached = new Map();
     const uncached = [];
-    
+
     for (const word of words) {
       const item = this.get(word, sourceLang, targetLang);
       if (item) {
@@ -167,7 +173,7 @@ class CacheService {
         uncached.push(word);
       }
     }
-    
+
     return { cached, uncached };
   }
 
@@ -184,7 +190,7 @@ class CacheService {
           ...value
         });
       }
-      
+
       await storage.setLocal({
         [CACHE_CONFIG.storageKey]: data
       });

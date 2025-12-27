@@ -1,3 +1,13 @@
+/**
+ * VocabMeld Options 样式
+ * 
+ * @input  options.html 页面结构
+ * @output 设置页面完整样式、表单组件、词汇管理、主题编辑器
+ * @pos    样式层，设置页面的视觉呈现
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 css/AGENTS.md
+ */
+
 /* VocabMeld Options 样式 */
 
 :root {
@@ -161,8 +171,15 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .settings-section h2 {
@@ -379,7 +396,7 @@ body {
   transition: var(--transition);
 }
 
-.intensity-option input:checked + .intensity-card {
+.intensity-option input:checked+.intensity-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -434,7 +451,7 @@ body {
   transition: var(--transition);
 }
 
-.process-mode-option input:checked + .process-mode-card {
+.process-mode-option input:checked+.process-mode-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -516,7 +533,7 @@ body {
   margin-bottom: 0;
 }
 
-.voice-setting-row > label {
+.voice-setting-row>label {
   min-width: 120px;
   font-size: 14px;
   color: var(--text-secondary);
@@ -622,11 +639,11 @@ body {
   border-radius: 50%;
 }
 
-input:checked + .toggle-slider {
+input:checked+.toggle-slider {
   background: var(--primary);
 }
 
-input:checked + .toggle-slider:before {
+input:checked+.toggle-slider:before {
   transform: translateX(22px);
   background: white;
 }
@@ -924,7 +941,7 @@ input:checked + .toggle-slider:before {
   border-color: var(--primary-light);
 }
 
-.theme-option input:checked + .theme-card {
+.theme-option input:checked+.theme-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -1013,7 +1030,7 @@ input:checked + .toggle-slider:before {
   border-color: var(--primary-light);
 }
 
-.style-option input:checked + .style-card {
+.style-option input:checked+.style-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -1063,7 +1080,7 @@ input:checked + .toggle-slider:before {
   border-color: var(--primary-light);
 }
 
-.cache-option input:checked + .cache-card {
+.cache-option input:checked+.cache-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -1112,7 +1129,7 @@ input:checked + .toggle-slider:before {
   border-color: var(--primary-light);
 }
 
-.site-mode-option input:checked + .site-mode-card {
+.site-mode-option input:checked+.site-mode-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -1630,6 +1647,7 @@ input:checked + .toggle-slider:before {
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -1785,7 +1803,7 @@ input:checked + .toggle-slider:before {
   transition: var(--transition);
 }
 
-.color-theme-option input:checked + .color-theme-card {
+.color-theme-option input:checked+.color-theme-card {
   border-color: var(--primary);
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
@@ -1798,13 +1816,13 @@ input:checked + .toggle-slider:before {
   display: inline;
   border-bottom-width: var(--underline-width, 1.5px);
   border-bottom-style: var(--underline-style, solid);
-  border-bottom-color: var(--preview-underline, rgba(99,102,241,0.6));
+  border-bottom-color: var(--preview-underline, rgba(99, 102, 241, 0.6));
   font-size: 14px;
   cursor: pointer;
   border-radius: 3px;
   transition: background 0.15s ease;
   margin: 0 2px;
-  background: var(--preview-bg, rgba(99,102,241,0.15));
+  background: var(--preview-bg, rgba(99, 102, 241, 0.15));
 }
 
 .color-theme-word {
@@ -1856,14 +1874,14 @@ input:checked + .toggle-slider:before {
   display: inline;
   border-bottom-width: var(--preview-underline-width, 2px);
   border-bottom-style: var(--preview-underline-style, solid);
-  border-bottom-color: var(--preview-underline, rgba(99,102,241,0.5));
+  border-bottom-color: var(--preview-underline, rgba(99, 102, 241, 0.5));
   cursor: pointer;
   border-radius: 2px;
   transition: background 0.15s;
 }
 
 .preview-translated:hover {
-  background: var(--preview-bg, rgba(99,102,241,0.1));
+  background: var(--preview-bg, rgba(99, 102, 241, 0.1));
 }
 
 .preview-word {

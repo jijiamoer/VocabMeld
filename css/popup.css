@@ -1,3 +1,13 @@
+/**
+ * VocabMeld Popup 样式
+ * 
+ * @input  popup.html 页面结构
+ * @output 弹出窗口完整样式、统计卡片、按钮、主题切换
+ * @pos    样式层，弹出窗口的视觉呈现
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 css/AGENTS.md
+ */
+
 /* VocabMeld Popup 样式 */
 
 :root {
@@ -157,11 +167,11 @@ body {
   border-radius: 50%;
 }
 
-.mini-toggle input:checked + .mini-toggle-slider {
+.mini-toggle input:checked+.mini-toggle-slider {
   background: var(--primary);
 }
 
-.mini-toggle input:checked + .mini-toggle-slider:before {
+.mini-toggle input:checked+.mini-toggle-slider:before {
   transform: translateX(16px);
   background: white;
 }
@@ -221,10 +231,21 @@ body {
   margin-bottom: 4px;
 }
 
-.stat-total .stat-value { color: var(--primary-light); }
-.stat-today .stat-value { color: var(--success); }
-.stat-learned .stat-value { color: var(--warning); }
-.stat-memorize .stat-value { color: #f472b6; }
+.stat-total .stat-value {
+  color: var(--primary-light);
+}
+
+.stat-today .stat-value {
+  color: var(--success);
+}
+
+.stat-learned .stat-value {
+  color: var(--warning);
+}
+
+.stat-memorize .stat-value {
+  color: #f472b6;
+}
 
 .stat-label {
   font-size: 11px;
@@ -313,8 +334,13 @@ body {
 
 /* Spinning Animation */
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .spinning {
@@ -410,4 +436,3 @@ kbd {
   color: #22c55e;
   border-color: rgba(34, 197, 94, 0.3);
 }
-

@@ -1,6 +1,12 @@
 /**
  * VocabMeld 内容分段器模块
  * 智能分段页面内容，平衡处理批次大小和上下文相关性
+ * 
+ * @input  config.js（跳过标签/类名）、网页 DOM
+ * @output ContentSegmenter 类，页面分段、指纹去重
+ * @pos    服务层，为翻译引擎提供结构化内容
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/services/AGENTS.md
  */
 
 import { SKIP_TAGS, SKIP_CLASSES } from '../core/config.js';
@@ -22,7 +28,7 @@ class ContentSegmenter {
    */
   shouldSkipNode(node) {
     if (!node) return true;
-    
+
     // 跳过非元素节点（除了文本节点）
     if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.TEXT_NODE) {
       return true;
@@ -34,7 +40,7 @@ class ContentSegmenter {
     }
 
     const element = node;
-    
+
     // 跳过特定标签
     if (SKIP_TAGS.includes(element.tagName)) {
       return true;
@@ -99,13 +105,13 @@ class ContentSegmenter {
     const content = text.slice(0, 100).trim();
     let hash = 0;
     const str = content + path;
-    
+
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
       hash = hash & hash; // 转换为32位整数
     }
-    
+
     return hash.toString(36);
   }
 
@@ -117,7 +123,7 @@ class ContentSegmenter {
   getElementPath(element) {
     const parts = [];
     let current = element;
-    
+
     while (current && current !== document.body) {
       let selector = current.tagName.toLowerCase();
       if (current.id) {
@@ -129,7 +135,7 @@ class ContentSegmenter {
       parts.unshift(selector);
       current = current.parentElement;
     }
-    
+
     return parts.join('>');
   }
 
@@ -166,11 +172,11 @@ class ContentSegmenter {
   getPageSegments(root = document.body, options = {}) {
     const { viewportOnly = false, margin = 300 } = options;
     const segments = [];
-    
+
     // 如果只处理视口内容，获取视口范围
     let viewportTop = 0;
     let viewportBottom = Infinity;
-    
+
     if (viewportOnly) {
       viewportTop = window.scrollY - margin;
       viewportBottom = window.scrollY + window.innerHeight + margin;
@@ -185,7 +191,7 @@ class ContentSegmenter {
         const rect = container.getBoundingClientRect();
         const elementTop = rect.top + window.scrollY;
         const elementBottom = rect.bottom + window.scrollY;
-        
+
         if (elementBottom < viewportTop || elementTop > viewportBottom) {
           continue;
         }
@@ -193,7 +199,7 @@ class ContentSegmenter {
 
       // 获取文本内容
       const text = this.getTextContent(container);
-      
+
       if (!text || text.length < this.minSegmentLength) {
         continue;
       }
@@ -206,7 +212,7 @@ class ContentSegmenter {
       // 生成指纹并检查是否已处理
       const path = this.getElementPath(container);
       const fingerprint = this.generateFingerprint(text, path);
-      
+
       if (this.isProcessed(fingerprint)) {
         continue;
       }
@@ -230,7 +236,7 @@ class ContentSegmenter {
   findTextContainers(root) {
     const containers = [];
     const blockTags = ['P', 'DIV', 'ARTICLE', 'SECTION', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SPAN', 'BLOCKQUOTE'];
-    
+
     const walker = document.createTreeWalker(
       root,
       NodeFilter.SHOW_ELEMENT,
@@ -239,11 +245,11 @@ class ContentSegmenter {
           if (this.shouldSkipNode(node)) {
             return NodeFilter.FILTER_REJECT;
           }
-          
+
           if (blockTags.includes(node.tagName)) {
             return NodeFilter.FILTER_ACCEPT;
           }
-          
+
           return NodeFilter.FILTER_SKIP;
         }
       }
@@ -255,7 +261,7 @@ class ContentSegmenter {
       const hasDirectText = Array.from(node.childNodes).some(
         child => child.nodeType === Node.TEXT_NODE && child.textContent.trim().length > 10
       );
-      
+
       if (hasDirectText) {
         containers.push(node);
       }
@@ -271,7 +277,7 @@ class ContentSegmenter {
    */
   getTextContent(element) {
     const texts = [];
-    
+
     const walker = document.createTreeWalker(
       element,
       NodeFilter.SHOW_TEXT,

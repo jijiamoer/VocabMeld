@@ -1,6 +1,12 @@
 /**
  * VocabMeld 配置管理模块
  * 管理所有配置项和默认值
+ * 
+ * @input  无外部依赖
+ * @output 配置常量、语言列表、CEFR 级别、默认值
+ * @pos    基础层，被 storage.js 和其他模块依赖
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/core/AGENTS.md
  */
 
 // CEFR 难度等级
@@ -71,28 +77,28 @@ export const DEFAULT_CONFIG = {
   modelName: API_PRESETS.deepseek.model,
   apiProtocol: 'openai_compatible',
   reasoningEffort: '',
-  
+
   // 学习偏好
   nativeLanguage: 'zh-CN',
   targetLanguage: 'en',
   difficultyLevel: 'B1',
   intensity: 'medium',
-  
+
   // 行为设置
   autoProcess: false,
   showPhonetic: true,
   dictionaryType: 'zh-en', // 'zh-en' 中英, 'en-en' 英英
   enabled: true,
-  
+
   // 站点规则
   blacklist: [],
   whitelist: [],
-  
+
   // 统计数据
   totalWords: 0,
   todayWords: 0,
   lastResetDate: new Date().toISOString().split('T')[0],
-  
+
   // 缓存统计
   cacheHits: 0,
   cacheMisses: 0

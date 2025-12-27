@@ -1,5 +1,11 @@
 /**
  * VocabMeld Popup 脚本
+ * 
+ * @input  chrome.storage 配置、background.js 统计数据
+ * @output 状态展示、快捷操作、站点规则切换
+ * @pos    弹出窗口逻辑，用户快捷入口
+ * 
+ * 一旦我被更新，务必更新我的开头注释，以及 js/AGENTS.md
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -48,14 +54,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   function applyColorTheme(themeId, customTheme) {
     const theme = themeId === 'custom' && customTheme ? customTheme : BUILT_IN_THEMES[themeId] || BUILT_IN_THEMES.default;
     const root = document.documentElement;
-    
+
     // 计算渐变的第二个颜色
     const gradientEnd = theme.primary.replace('#', '');
     const r = Math.max(0, parseInt(gradientEnd.substr(0, 2), 16) - 20);
     const g = Math.max(0, parseInt(gradientEnd.substr(2, 2), 16) - 30);
     const b = Math.min(255, parseInt(gradientEnd.substr(4, 2), 16) + 20);
     const secondColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-    
+
     root.style.setProperty('--primary', theme.primary);
     root.style.setProperty('--primary-light', theme.tooltipWord);
     root.style.setProperty('--primary-dark', secondColor);
@@ -66,11 +72,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const theme = result.theme || 'dark';
     document.documentElement.setAttribute('data-theme', theme);
     updateThemeIcon(theme);
-    
+
     // 应用配色主题
     applyColorTheme(result.colorTheme || 'default', result.customTheme);
   });
-  
+
   // 更新主题图标
   function updateThemeIcon(theme) {
     const iconDark = themeToggleBtn.querySelector('.icon-theme-dark');
@@ -132,8 +138,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       // 通知内容脚本
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs[0]) {
-          chrome.tabs.sendMessage(tabs[0].id, { 
-            action: enabled ? 'processPage' : 'restorePage' 
+          chrome.tabs.sendMessage(tabs[0].id, {
+            action: enabled ? 'processPage' : 'restorePage'
           });
         }
       });
@@ -200,7 +206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 更新站点按钮状态
   function updateSiteBtn(isInList, mode) {
     excludeSiteBtn.classList.remove('active', 'active-success');
-    
+
     if (mode === 'all') {
       // 所有网站模式：显示排除状态（红色叉）
       iconExclude.style.display = '';
@@ -224,12 +230,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   excludeSiteBtn.addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.url) return;
-    
+
     try {
       const url = new URL(tab.url);
       const hostname = url.hostname;
       const listKey = currentSiteMode === 'all' ? 'excludedSites' : 'allowedSites';
-      
+
       chrome.storage.sync.get(listKey, (result) => {
         const sites = result[listKey] || [];
         if (sites.includes(hostname)) {
@@ -255,22 +261,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function checkSiteStatus() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.url) return;
-    
+
     try {
       const url = new URL(tab.url);
       const hostname = url.hostname;
-      
+
       chrome.storage.sync.get(['siteMode', 'excludedSites', 'allowedSites'], (result) => {
         currentSiteMode = result.siteMode || 'all';
         // 更新模式提示
         siteModeText.textContent = '运行模式：' + (currentSiteMode === 'all' ? '所有网站' : '仅指定');
-        
+
         const listKey = currentSiteMode === 'all' ? 'excludedSites' : 'allowedSites';
         const sites = result[listKey] || [];
         const isInList = sites.some(s => hostname.includes(s));
         updateSiteBtn(isInList, currentSiteMode);
       });
-    } catch (e) {}
+    } catch (e) { }
   }
 
   // 初始加载
