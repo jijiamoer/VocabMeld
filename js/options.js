@@ -1058,11 +1058,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 加载翻译历史（基于段落级缓存）
     chrome.storage.local.get('vocabmeld_segment_cache_v1', (data) => {
-      const segmentCache = data.vocabmeld_segment_cache_v1 || {};
+      const segmentCache = data.vocabmeld_segment_cache_v1 || [];
 
       // 提取所有词汇
       const allWords = [];
-      for (const cacheValue of Object.values(segmentCache)) {
+      // 段落缓存是数组格式: [{key: "hash", value: {immediate, async, savedAt}}]
+      for (const item of segmentCache) {
+        if (!item || typeof item !== 'object') continue;
+
+        // 从 item.value 中提取缓存数据
+        const cacheValue = item.value;
         if (!cacheValue || typeof cacheValue !== 'object') continue;
 
         const savedAt = typeof cacheValue.savedAt === 'number' ? cacheValue.savedAt : Date.now();
