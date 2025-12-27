@@ -327,8 +327,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'getCacheStats') {
     chrome.storage.sync.get('cacheMaxSize', (syncResult) => {
       const maxSize = syncResult.cacheMaxSize || 2000;
-      chrome.storage.local.get('vocabmeld_word_cache', (result) => {
-        const cache = result.vocabmeld_word_cache || [];
+      chrome.storage.local.get('vocabmeld_segment_cache_v1', (result) => {
+        const cache = result.vocabmeld_segment_cache_v1 || [];
         sendResponse({
           size: cache.length,
           maxSize: maxSize
@@ -340,7 +340,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 清空缓存
   if (message.action === 'clearCache') {
-    chrome.storage.local.remove('vocabmeld_word_cache', () => {
+    chrome.storage.local.remove('vocabmeld_segment_cache_v1', () => {
       chrome.storage.sync.set({ cacheHits: 0, cacheMisses: 0 }, () => {
         sendResponse({ success: true });
       });
