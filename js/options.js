@@ -950,6 +950,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         radio.checked = parseInt(radio.value) === cacheMaxSize;
       });
 
+      const minTextLength = result.minTextLength ?? 15;
+      const minTextLengthRadios = document.querySelectorAll('input[name="minTextLength"]');
+      minTextLengthRadios.forEach(radio => {
+        radio.checked = parseInt(radio.value) === minTextLength;
+      });
+
       const translationStyle = result.translationStyle || 'translation-original';
       elements.translationStyleRadios.forEach(radio => {
         radio.checked = radio.value === translationStyle;
@@ -1292,6 +1298,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       dictionaryType: document.querySelector('input[name="dictionaryType"]:checked')?.value || 'zh-en',
       showAddMemorize: elements.showAddMemorize.checked,
       cacheMaxSize: parseInt(document.querySelector('input[name="cacheMaxSize"]:checked').value),
+      minTextLength: parseInt(document.querySelector('input[name="minTextLength"]:checked')?.value ?? 15),
       translationStyle: document.querySelector('input[name="translationStyle"]:checked').value,
       ttsVoice: elements.ttsVoice.value,
       ttsRate: parseFloat(elements.ttsRate.value),
@@ -1348,6 +1355,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 缓存上限 - 改变时保存
     elements.cacheMaxSizeRadios.forEach(radio => {
+      radio.addEventListener('change', () => debouncedSave(200));
+    });
+
+    // 最小处理长度 - 改变时保存
+    document.querySelectorAll('input[name="minTextLength"]').forEach(radio => {
       radio.addEventListener('change', () => debouncedSave(200));
     });
 

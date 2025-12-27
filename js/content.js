@@ -193,6 +193,7 @@
             dictionaryType: syncResult.dictionaryType || 'zh-en',
             showAddMemorize: syncResult.showAddMemorize ?? true,
             cacheMaxSize: syncResult.cacheMaxSize || DEFAULT_CACHE_MAX_SIZE,
+            minTextLength: syncResult.minTextLength ?? 15,
             translationStyle: syncResult.translationStyle || 'translation-original',
             theme: syncResult.theme || 'dark',
             enabled: syncResult.enabled ?? true,
@@ -918,7 +919,8 @@
     const immediateResults = [];
 
     // 文本过短时直接跳过 API，避免无意义请求
-    const textTooShort = text.trim().length < 50;
+    const minLength = config?.minTextLength ?? 15;
+    const textTooShort = text.trim().length < minLength;
     if (textTooShort) {
       return { immediate: [], async: null };
     }
