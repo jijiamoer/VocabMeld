@@ -26,13 +26,54 @@ chrome.runtime.onInstalled.addListener((details) => {
       siteMode: 'all',
       excludedSites: [],
       allowedSites: [],
-      learnedWords: [],
-      memorizeList: [],
       totalWords: 0,
       todayWords: 0,
       lastResetDate: new Date().toISOString().split('T')[0],
       cacheHits: 0,
       cacheMisses: 0
+    });
+    // 词汇列表存储在 local 中，避免 sync 的 8KB 限制
+    chrome.storage.local.set({ learnedWords: [], memorizeList: [] });
+  }
+  
+  // 更新时迁移：将 sync 中的词汇列表迁移到 local
+  if (details.reason === 'update') {
+    chrome.storage.sync.get(['learnedWords', 'memorizeList'], (syncResult) => {
+      chrome.storage.local.get(['learnedWords', 'memorizeList'], (localResult) => {
+        const updates = {};
+        const toRemove = [];
+        
+        // 迁移 learnedWords
+        if (syncResult.learnedWords && syncResult.learnedWords.length > 0) {
+          const localWords = localResult.learnedWords || [];
+          const mergedMap = new Map();
+          [...localWords, ...syncResult.learnedWords].forEach(w => {
+            const key = w.original || w.word;
+            if (!mergedMap.has(key)) mergedMap.set(key, w);
+          });
+          updates.learnedWords = Array.from(mergedMap.values());
+          toRemove.push('learnedWords');
+        }
+        
+        // 迁移 memorizeList
+        if (syncResult.memorizeList && syncResult.memorizeList.length > 0) {
+          const localList = localResult.memorizeList || [];
+          const mergedMap = new Map();
+          [...localList, ...syncResult.memorizeList].forEach(w => {
+            if (!mergedMap.has(w.word)) mergedMap.set(w.word, w);
+          });
+          updates.memorizeList = Array.from(mergedMap.values());
+          toRemove.push('memorizeList');
+        }
+        
+        if (Object.keys(updates).length > 0) {
+          chrome.storage.local.set(updates, () => {
+            chrome.storage.sync.remove(toRemove, () => {
+              console.log('[VocabMeld] Migrated word lists from sync to local');
+            });
+          });
+        }
+      });
     });
   }
   
@@ -62,11 +103,11 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'vocabmeld-add-memorize' && info.selectionText) {
     const word = info.selectionText.trim();
     if (word && word.length < 50) {
-      chrome.storage.sync.get('memorizeList', (result) => {
+      chrome.storage.local.get('memorizeList', (result) => {
         const list = result.memorizeList || [];
         if (!list.some(w => w.word === word)) {
           list.push({ word, addedAt: Date.now() });
-          chrome.storage.sync.set({ memorizeList: list }, () => {
+          chrome.storage.local.set({ memorizeList: list }, () => {
             // 通知 content script 处理特定单词
             chrome.tabs.sendMessage(tab.id, { 
               action: 'processSpecificWords', 
@@ -235,27 +276,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   
+  // 通用 fetch 代理（用于第三方 API，避免 CORS）
+  if (message.action === 'fetchProxy') {
+    fetch(message.url)
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(data => sendResponse({ success: true, data }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  
   // 获取统计数据
   if (message.action === 'getStats') {
     chrome.storage.sync.get([
       'totalWords', 'todayWords', 'lastResetDate',
-      'cacheHits', 'cacheMisses', 'learnedWords', 'memorizeList'
-    ], (result) => {
-      // 检查是否需要重置今日统计
-      const today = new Date().toISOString().split('T')[0];
-      if (result.lastResetDate !== today) {
-        result.todayWords = 0;
-        result.lastResetDate = today;
-        chrome.storage.sync.set({ todayWords: 0, lastResetDate: today });
-      }
-      
-      sendResponse({
-        totalWords: result.totalWords || 0,
-        todayWords: result.todayWords || 0,
-        learnedCount: (result.learnedWords || []).length,
-        memorizeCount: (result.memorizeList || []).length,
-        cacheHits: result.cacheHits || 0,
-        cacheMisses: result.cacheMisses || 0
+      'cacheHits', 'cacheMisses'
+    ], (syncResult) => {
+      // 从 local 获取词汇列表
+      chrome.storage.local.get(['learnedWords', 'memorizeList'], (localResult) => {
+        // 检查是否需要重置今日统计
+        const today = new Date().toISOString().split('T')[0];
+        if (syncResult.lastResetDate !== today) {
+          syncResult.todayWords = 0;
+          syncResult.lastResetDate = today;
+          chrome.storage.sync.set({ todayWords: 0, lastResetDate: today });
+        }
+        
+        sendResponse({
+          totalWords: syncResult.totalWords || 0,
+          todayWords: syncResult.todayWords || 0,
+          learnedCount: (localResult.learnedWords || []).length,
+          memorizeCount: (localResult.memorizeList || []).length,
+          cacheHits: syncResult.cacheHits || 0,
+          cacheMisses: syncResult.cacheMisses || 0
+        });
       });
     });
     return true;
@@ -288,7 +344,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // 清空已学会词汇
   if (message.action === 'clearLearnedWords') {
-    chrome.storage.sync.set({ learnedWords: [] }, () => {
+    chrome.storage.local.set({ learnedWords: [] }, () => {
       sendResponse({ success: true });
     });
     return true;
@@ -296,7 +352,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // 清空需记忆列表
   if (message.action === 'clearMemorizeList') {
-    chrome.storage.sync.set({ memorizeList: [] }, () => {
+    chrome.storage.local.set({ memorizeList: [] }, () => {
       sendResponse({ success: true });
     });
     return true;

@@ -93,40 +93,47 @@ body {
   color: var(--text-muted);
 }
 
-.toggle-section {
+/* Header Actions */
+.header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
-.toggle-label {
-  font-size: 12px;
+.header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.toggle-label.enabled {
-  color: var(--success);
+.header-btn:hover {
+  background: var(--primary);
+  color: white;
 }
 
-.toggle-label.disabled {
-  color: var(--text-muted);
-}
-
-/* Toggle Switch */
-.toggle-switch {
+/* Mini Toggle Switch */
+.mini-toggle {
   position: relative;
   display: inline-block;
-  width: 44px;
-  height: 24px;
+  width: 36px;
+  height: 20px;
 }
 
-.toggle-switch input {
+.mini-toggle input {
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-.toggle-slider {
+.mini-toggle-slider {
   position: absolute;
   cursor: pointer;
   top: 0;
@@ -135,14 +142,14 @@ body {
   bottom: 0;
   background: var(--bg-tertiary);
   transition: 0.3s;
-  border-radius: 24px;
+  border-radius: 20px;
 }
 
-.toggle-slider:before {
+.mini-toggle-slider:before {
   position: absolute;
   content: "";
-  height: 18px;
-  width: 18px;
+  height: 14px;
+  width: 14px;
   left: 3px;
   bottom: 3px;
   background: var(--text-secondary);
@@ -150,13 +157,22 @@ body {
   border-radius: 50%;
 }
 
-input:checked + .toggle-slider {
+.mini-toggle input:checked + .mini-toggle-slider {
   background: var(--primary);
 }
 
-input:checked + .toggle-slider:before {
-  transform: translateX(20px);
+.mini-toggle input:checked + .mini-toggle-slider:before {
+  transform: translateX(16px);
   background: white;
+}
+
+/* Theme Toggle Button Icons */
+[data-theme="light"] .icon-theme-dark {
+  display: none;
+}
+
+[data-theme="light"] .icon-theme-light {
+  display: block !important;
 }
 
 /* Stats Section */
@@ -270,12 +286,12 @@ input:checked + .toggle-slider:before {
 .btn-primary {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: white;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 40%, transparent);
 }
 
 .btn-primary:disabled {
@@ -312,6 +328,36 @@ input:checked + .toggle-slider:before {
   align-items: center;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  gap: 12px;
+}
+
+.footer-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.site-mode-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.footer-github {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+}
+
+.footer-github:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
 }
 
 kbd {
@@ -331,62 +377,6 @@ kbd {
   margin-left: 4px;
 }
 
-/* Theme Switch */
-.theme-switch {
-  position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 22px;
-}
-
-.theme-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.theme-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--bg-tertiary);
-  border-radius: 20px;
-  transition: 0.3s;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 4px;
-}
-
-.theme-slider .icon-sun,
-.theme-slider .icon-moon {
-  transition: opacity 0.3s;
-}
-
-.theme-slider .icon-sun {
-  color: var(--warning);
-  opacity: 0.4;
-}
-
-.theme-slider .icon-moon {
-  color: var(--primary-light);
-  opacity: 1;
-}
-
-.theme-switch input:checked + .theme-slider .icon-sun {
-  opacity: 1;
-}
-
-.theme-switch input:checked + .theme-slider .icon-moon {
-  opacity: 0.4;
-}
-
-.theme-switch input:checked + .theme-slider {
-  background: var(--bg-tertiary);
-}
 
 /* Text Button */
 .btn-text {
@@ -421,8 +411,3 @@ kbd {
   border-color: rgba(34, 197, 94, 0.3);
 }
 
-.site-mode-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}

@@ -5,7 +5,6 @@
 document.addEventListener('DOMContentLoaded', async () => {
   // DOM 元素
   const enableToggle = document.getElementById('enableToggle');
-  const toggleLabel = document.getElementById('toggleLabel');
   const totalWords = document.getElementById('totalWords');
   const todayWords = document.getElementById('todayWords');
   const learnedCount = document.getElementById('learnedCount');
@@ -14,10 +13,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const hitRate = document.getElementById('hitRate');
   const processBtn = document.getElementById('processBtn');
   const settingsBtn = document.getElementById('settingsBtn');
-  const themeToggle = document.getElementById('themeToggle');
+  const themeToggleBtn = document.getElementById('themeToggleBtn');
   const excludeSiteBtn = document.getElementById('excludeSiteBtn');
   const excludeSiteText = document.getElementById('excludeSiteText');
-  const siteModeHint = document.getElementById('siteModeHint');
+  const siteModeText = document.getElementById('siteModeText');
   const shortcutKey = document.getElementById('shortcutKey');
 
   // 当前快捷键
@@ -37,12 +36,53 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // 加载主题
-  chrome.storage.sync.get('theme', (result) => {
+  // 内置主题配置
+  const BUILT_IN_THEMES = {
+    default: { primary: '#6366f1', tooltipWord: '#818cf8' },
+    ocean: { primary: '#0ea5e9', tooltipWord: '#38bdf8' },
+    forest: { primary: '#10b981', tooltipWord: '#34d399' },
+    sunset: { primary: '#f59e0b', tooltipWord: '#fbbf24' }
+  };
+
+  // 应用配色主题
+  function applyColorTheme(themeId, customTheme) {
+    const theme = themeId === 'custom' && customTheme ? customTheme : BUILT_IN_THEMES[themeId] || BUILT_IN_THEMES.default;
+    const root = document.documentElement;
+    
+    // 计算渐变的第二个颜色
+    const gradientEnd = theme.primary.replace('#', '');
+    const r = Math.max(0, parseInt(gradientEnd.substr(0, 2), 16) - 20);
+    const g = Math.max(0, parseInt(gradientEnd.substr(2, 2), 16) - 30);
+    const b = Math.min(255, parseInt(gradientEnd.substr(4, 2), 16) + 20);
+    const secondColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+    
+    root.style.setProperty('--primary', theme.primary);
+    root.style.setProperty('--primary-light', theme.tooltipWord);
+    root.style.setProperty('--primary-dark', secondColor);
+  }
+
+  // 加载主题和配色
+  chrome.storage.sync.get(['theme', 'colorTheme', 'customTheme'], (result) => {
     const theme = result.theme || 'dark';
     document.documentElement.setAttribute('data-theme', theme);
-    themeToggle.checked = theme === 'light';
+    updateThemeIcon(theme);
+    
+    // 应用配色主题
+    applyColorTheme(result.colorTheme || 'default', result.customTheme);
   });
+  
+  // 更新主题图标
+  function updateThemeIcon(theme) {
+    const iconDark = themeToggleBtn.querySelector('.icon-theme-dark');
+    const iconLight = themeToggleBtn.querySelector('.icon-theme-light');
+    if (theme === 'light') {
+      iconDark.style.display = 'none';
+      iconLight.style.display = '';
+    } else {
+      iconDark.style.display = '';
+      iconLight.style.display = 'none';
+    }
+  }
 
   // 加载配置和统计
   async function loadData() {
@@ -50,8 +90,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.storage.sync.get('enabled', (result) => {
       const enabled = result.enabled !== false;
       enableToggle.checked = enabled;
-      toggleLabel.textContent = enabled ? '已启用' : '已禁用';
-      toggleLabel.className = `toggle-label ${enabled ? 'enabled' : 'disabled'}`;
     });
 
     // 加载统计数据
@@ -91,9 +129,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   enableToggle.addEventListener('change', () => {
     const enabled = enableToggle.checked;
     chrome.storage.sync.set({ enabled }, () => {
-      toggleLabel.textContent = enabled ? '已启用' : '已禁用';
-      toggleLabel.className = `toggle-label ${enabled ? 'enabled' : 'disabled'}`;
-      
       // 通知内容脚本
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (tabs[0]) {
@@ -149,10 +184,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 主题切换
-  themeToggle.addEventListener('change', () => {
-    const theme = themeToggle.checked ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', theme);
-    chrome.storage.sync.set({ theme });
+  themeToggleBtn.addEventListener('click', () => {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    updateThemeIcon(newTheme);
+    chrome.storage.sync.set({ theme: newTheme });
   });
 
   // 当前站点模式
@@ -226,7 +263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       chrome.storage.sync.get(['siteMode', 'excludedSites', 'allowedSites'], (result) => {
         currentSiteMode = result.siteMode || 'all';
         // 更新模式提示
-        siteModeHint.textContent = currentSiteMode === 'all' ? '所有网站' : '仅指定';
+        siteModeText.textContent = '运行模式：' + (currentSiteMode === 'all' ? '所有网站' : '仅指定');
         
         const listKey = currentSiteMode === 'all' ? 'excludedSites' : 'allowedSites';
         const sites = result[listKey] || [];
@@ -244,11 +281,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 定期刷新
   setInterval(loadData, 5000);
 
-  // 监听主题变化
+  // 监听主题和配色变化
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'sync' && changes.theme) {
-      document.documentElement.setAttribute('data-theme', changes.theme.newValue);
-      themeToggle.checked = changes.theme.newValue === 'light';
+    if (areaName === 'sync') {
+      if (changes.theme) {
+        document.documentElement.setAttribute('data-theme', changes.theme.newValue);
+        updateThemeIcon(changes.theme.newValue);
+      }
+      if (changes.colorTheme || changes.customTheme) {
+        chrome.storage.sync.get(['colorTheme', 'customTheme'], (result) => {
+          applyColorTheme(result.colorTheme || 'default', result.customTheme);
+        });
+      }
     }
   });
 });

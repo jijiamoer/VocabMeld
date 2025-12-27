@@ -81,6 +81,7 @@ export const DEFAULT_CONFIG = {
   // 行为设置
   autoProcess: false,
   showPhonetic: true,
+  dictionaryType: 'zh-en', // 'zh-en' 中英, 'en-en' 英英
   enabled: true,
   
   // 站点规则

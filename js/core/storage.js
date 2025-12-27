@@ -131,11 +131,11 @@ class StorageService {
   }
 
   /**
-   * 获取白名单（已学会词汇）
+   * 获取白名单（已学会词汇）- 存储在 local 中避免 sync 的 8KB 限制
    * @returns {Promise<Array>}
    */
   async getWhitelist() {
-    const result = await this.get('learnedWords');
+    const result = await this.getLocal('learnedWords');
     return result.learnedWords || [];
   }
 
@@ -153,7 +153,7 @@ class StorageService {
         word: word.word,
         addedAt: Date.now()
       });
-      await this.set({ learnedWords: whitelist });
+      await this.setLocal({ learnedWords: whitelist });
     }
   }
 
@@ -165,15 +165,15 @@ class StorageService {
   async removeFromWhitelist(word) {
     const whitelist = await this.getWhitelist();
     const filtered = whitelist.filter(w => w.original !== word && w.word !== word);
-    await this.set({ learnedWords: filtered });
+    await this.setLocal({ learnedWords: filtered });
   }
 
   /**
-   * 获取需记忆列表
+   * 获取需记忆列表 - 存储在 local 中避免 sync 的 8KB 限制
    * @returns {Promise<Array>}
    */
   async getMemorizeList() {
-    const result = await this.get('memorizeList');
+    const result = await this.getLocal('memorizeList');
     return result.memorizeList || [];
   }
 
@@ -190,7 +190,7 @@ class StorageService {
         word: word,
         addedAt: Date.now()
       });
-      await this.set({ memorizeList: list });
+      await this.setLocal({ memorizeList: list });
     }
   }
 
@@ -202,7 +202,7 @@ class StorageService {
   async removeFromMemorizeList(word) {
     const list = await this.getMemorizeList();
     const filtered = list.filter(w => w.word !== word);
-    await this.set({ memorizeList: filtered });
+    await this.setLocal({ memorizeList: filtered });
   }
 
   /**
