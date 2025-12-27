@@ -1779,7 +1779,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         // 词汇列表存储在 local 中
         chrome.storage.local.set({ learnedWords: [], memorizeList: [] });
-        chrome.storage.local.remove('vocabmeld_word_cache', () => {
+        chrome.storage.local.remove('vocabmeld_segment_cache_v1', () => {
           loadSettings();
           debouncedSave(200);
         });
@@ -1841,8 +1841,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       if (elements.exportCache.checked) {
-        const localData = await new Promise(resolve => chrome.storage.local.get('vocabmeld_word_cache', resolve));
-        exportData.cache = localData.vocabmeld_word_cache || [];
+        const localData = await new Promise(resolve => chrome.storage.local.get('vocabmeld_segment_cache_v1', resolve));
+        exportData.cache = localData.vocabmeld_segment_cache_v1 || [];
       }
 
       // 下载文件
@@ -1904,7 +1904,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               deduplicatedCache.push(item);
             }
           }
-          localUpdates.vocabmeld_word_cache = deduplicatedCache;
+          localUpdates.vocabmeld_segment_cache_v1 = deduplicatedCache;
         }
 
         // 保存数据

@@ -549,7 +549,7 @@ interface ThemeConfig {
 
 | 键名 | 类型 | 说明 |
 |------|------|------|
-| vocabmeld_word_cache | CacheItem[] | 词汇缓存 |
+| vocabmeld_segment_cache_v1 | SegmentCacheItem[] | 段落翻译缓存 |
 
 ---
 
@@ -676,7 +676,7 @@ function shouldProcess(segment) {
 console.log('[VocabMeld] Debug info:', data);
 
 // 查看缓存
-chrome.storage.local.get('vocabmeld_word_cache', console.log);
+chrome.storage.local.get('vocabmeld_segment_cache_v1', console.log);
 
 // 查看配置
 chrome.storage.sync.get(null, console.log);

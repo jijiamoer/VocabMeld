@@ -107,7 +107,7 @@ export const DEFAULT_CONFIG = {
 // 缓存配置
 export const CACHE_CONFIG = {
   maxSize: 2000,
-  storageKey: 'vocabmeld_word_cache'
+  storageKey: 'vocabmeld_segment_cache_v1'
 };
 
 // 需要跳过的标签
