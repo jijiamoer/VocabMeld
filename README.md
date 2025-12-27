@@ -1,4 +1,4 @@
-# VocabMeld - 沉浸式语言学习 Chrome 插件
+# VocabMeld Enhanced - 沉浸式语言学习 Chrome 插件
 
 <p align="center">
   <img src="icons/icon.svg" width="128" height="128" alt="VocabMeld Logo">

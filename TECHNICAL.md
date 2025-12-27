@@ -1,4 +1,4 @@
-# VocabMeld 技术文档
+# VocabMeld Enhanced 技术文档
 
 本文档详细描述 VocabMeld 的技术实现方案，可作为复刻或二次开发的参考。
 

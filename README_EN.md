@@ -1,4 +1,4 @@
-# VocabMeld - Immersive Language Learning Chrome Extension
+# VocabMeld Enhanced - Immersive Language Learning Chrome Extension
 
 <p align="center">
   <img src="icons/icon.svg" width="128" height="128" alt="VocabMeld Logo">
