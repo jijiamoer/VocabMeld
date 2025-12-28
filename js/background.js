@@ -109,34 +109,33 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'vocabmeld-add-memorize' && info.selectionText) {
     const word = info.selectionText.trim();
     if (word && word.length < 50) {
-      chrome.storage.local.get('memorizeList', (result) => {
-        const list = result.memorizeList || [];
-        // 检查是否已存在（兼容新旧数据结构）
-        if (!list.some(w => w.word === word || w.original === word)) {
-          // 使用新的数据结构，与 content.js 中的 addToMemorizeList 保持一致
-          // 注意：右键菜单只有原文，没有翻译信息（翻译会在页面处理时获取）
-          list.push({
-            word: word,       // 保持兼容性
-            original: word,   // 原文
-            translation: '',  // 右键菜单添加时没有翻译，留空
-            phonetic: '',     // 右键菜单添加时没有音标，留空
-            difficulty: 'B1', // 默认难度
-            addedAt: Date.now()
-          });
-          chrome.storage.local.set({ memorizeList: list }, () => {
-            // 通知 content script 处理特定单词
-            chrome.tabs.sendMessage(tab.id, {
-              action: 'processSpecificWords',
-              words: [word]
-            }).catch(err => {
-              console.log('[VocabMeld] Content script not ready, word will be processed on next page load');
+      // 发送消息给 content script，让它获取上下文并处理
+      // 这样可以避免 background 和 content 同时写 storage 导致的并发冲突
+      chrome.tabs.sendMessage(tab.id, {
+        action: 'addToMemorizeListWithContext',
+        word: word
+      }).catch(err => {
+        // Content script 未就绪时，直接写入 storage（降级处理）
+        console.log('[VocabMeld] Content script not ready, adding directly to storage');
+        chrome.storage.local.get('memorizeList', (result) => {
+          const list = result.memorizeList || [];
+          const lowerWord = word.toLowerCase();
+          // 使用 toLowerCase 进行去重比较
+          if (!list.some(w => (w.word || '').toLowerCase() === lowerWord || (w.original || '').toLowerCase() === lowerWord)) {
+            list.push({
+              word: word,
+              original: word,
+              translation: '',
+              phonetic: '',
+              difficulty: 'B1',
+              addedAt: Date.now()
             });
-          });
-        }
+            chrome.storage.local.set({ memorizeList: list });
+          }
+        });
       });
     }
   }
-
 
   if (info.menuItemId === 'vocabmeld-process-page') {
     chrome.tabs.sendMessage(tab.id, { action: 'processPage' });
