@@ -2456,10 +2456,10 @@ ${sourceLang} → ${targetLang}
         <span class="vocabmeld-tooltip-word">${translation}</span>
         <span class="vocabmeld-tooltip-badge" data-difficulty="${difficulty}">${difficulty}</span>
         <button class="vocabmeld-tooltip-btn vocabmeld-btn-memorize ${isInMemorizeList ? 'active' : ''}" data-original="${original}" title="${isInMemorizeList ? '已在记忆列表' : '添加到记忆列表'}">
-          <svg viewBox="0 0 24 24" width="16" height="16">
+          <svg viewBox="0 0 24 24" width="18" height="18">
             ${isInMemorizeList
-        ? '<path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>'
-        : '<path fill="currentColor" d="M12.1,18.55L12,18.65L11.89,18.55C7.14,14.24 4,11.39 4,8.5C4,6.5 5.5,5 7.5,5C9.04,5 10.54,6 11.07,7.36H12.93C13.46,6 14.96,5 16.5,5C18.5,5 20,6.5 20,8.5C20,11.39 16.86,14.24 12.1,18.55M16.5,3C14.76,3 13.09,3.81 12,5.08C10.91,3.81 9.24,3 7.5,3C4.42,3 2,5.41 2,8.5C2,12.27 5.4,15.36 10.55,20.03L12,21.35L13.45,20.03C18.6,15.36 22,12.27 22,8.5C22,5.41 19.58,3 16.5,3Z"/>'
+        ? '<circle cx="12" cy="12" r="10" fill="#22c55e"/><path stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" d="M7 12.5L10.5 16L17 9"/>'
+        : '<path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" d="M12 6V18M6 12H18"/>'
       }
           </svg>
         </button>
@@ -2477,7 +2477,7 @@ ${sourceLang} → ${targetLang}
       <div class="vocabmeld-tooltip-actions">
         <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${original}" data-translation="${translation}" data-difficulty="${difficulty}" title="标记已学会">
           <svg viewBox="0 0 24 24" width="16" height="16">
-            <path fill="currentColor" d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/>
+            <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4L2 9l10 5 10-5-10-5zM2 9v6M6 11v6c0 0 2 3 6 3s6-3 6-3v-6"/>
           </svg>
         </button>
         <button class="vocabmeld-tooltip-btn vocabmeld-btn-retranslate" data-original="${original}" title="根据上下文重新翻译">
@@ -2690,20 +2690,21 @@ ${sourceLang} → ${targetLang}
           addToMemorizeList(original);
           memorizeBtn.classList.add('active');
           memorizeBtn.title = '已在记忆列表';
-          // 更新图标为实心
+          // 更新图标为绿色背景的对勾
           memorizeBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" width="16" height="16">
-              <path fill="currentColor" d="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <circle cx="12" cy="12" r="10" fill="#22c55e"/>
+              <path stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" d="M7 12.5L10.5 16L17 9"/>
             </svg>
           `;
         } else {
           removeFromMemorizeList(original);
           memorizeBtn.classList.remove('active');
           memorizeBtn.title = '添加到记忆';
-          // 更新图标为镂空
+          // 更新图标为加号
           memorizeBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" width="16" height="16">
-              <path fill="currentColor" d="M12.1,18.55L12,18.65L11.89,18.55C7.14,14.24 4,11.39 4,8.5C4,6.5 5.5,5 7.5,5C9.04,5 10.54,6 11.07,7.36H12.93C13.46,6 14.96,5 16.5,5C18.5,5 20,6.5 20,8.5C20,11.39 16.86,14.24 12.1,18.55M16.5,3C14.76,3 13.09,3.81 12,5.08C10.91,3.81 9.24,3 7.5,3C4.42,3 2,5.41 2,8.5C2,12.27 5.4,15.36 10.55,20.03L12,21.35L13.45,20.03C18.6,15.36 22,12.27 22,8.5C22,5.41 19.58,3 16.5,3Z"/>
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" d="M12 6V18M6 12H18"/>
             </svg>
           `;
         }
