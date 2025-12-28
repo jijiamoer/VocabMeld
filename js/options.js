@@ -1067,11 +1067,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       difficulty: w.difficulty || 'B1' // 如果已学会词汇有难度信息则使用，否则默认B1
     }));
 
+    // 保存原始数据（包含翻译和难度信息）
+    // 注意：memorizeList 中的数据结构已更新为包含 original、translation、phonetic、difficulty
     allMemorizeWords = memorizeList.map(w => ({
-      original: w.word,
-      word: '',
+      original: w.original || w.word,  // 原文（目标语言单词）
+      word: w.translation || '',       // 翻译（母语翻译）
+      phonetic: w.phonetic || '',      // 音标
       addedAt: w.addedAt,
-      difficulty: w.difficulty || 'B1' // 如果需记忆词汇有难度信息则使用，否则默认B1
+      difficulty: w.difficulty || 'B1'
     }));
 
     // 应用搜索和筛选
@@ -1301,7 +1304,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     } else if (type === 'memorize') {
       chrome.storage.local.get('memorizeList', (result) => {
-        const list = (result.memorizeList || []).filter(w => w.word !== word);
+        // 同时匹配 word 和 original 字段，兼容新旧数据结构
+        const list = (result.memorizeList || []).filter(w => w.word !== word && w.original !== word);
         chrome.storage.local.set({ memorizeList: list }, loadSettings);
       });
     }

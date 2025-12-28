@@ -462,18 +462,31 @@
     }
   }
 
-  async function addToMemorizeList(word) {
-    if (!word || !word.trim()) {
-      console.warn('[VocabMeld] Invalid word for memorize list:', word);
+  async function addToMemorizeList(wordInfo) {
+    // 兼容旧调用方式：如果传入的是字符串，则转换为对象
+    if (typeof wordInfo === 'string') {
+      wordInfo = { original: wordInfo };
+    }
+
+    const original = (wordInfo.original || '').trim();
+    if (!original) {
+      console.warn('[VocabMeld] Invalid word for memorize list:', wordInfo);
       return;
     }
 
-    const trimmedWord = word.trim();
     const list = config.memorizeList || [];
-    const exists = list.some(w => w.word === trimmedWord);
+    const exists = list.some(w => w.word === original || w.original === original);
 
     if (!exists) {
-      list.push({ word: trimmedWord, addedAt: Date.now() });
+      // 保存完整的词汇信息：original（原文）、translation（翻译）、phonetic（音标）、difficulty（难度）
+      list.push({
+        word: original,  // 保持 word 字段用于兼容性
+        original: original,
+        translation: wordInfo.translation || '',
+        phonetic: wordInfo.phonetic || '',
+        difficulty: wordInfo.difficulty || 'B1',
+        addedAt: Date.now()
+      });
       config.memorizeList = list;
       await new Promise(resolve => chrome.storage.local.set({ memorizeList: list }, resolve));
 
@@ -485,41 +498,43 @@
 
       // 确保扩展已启用
       if (!config.enabled) {
-        showToast(`"${trimmedWord}" 已添加到记忆列表`);
+        showToast(`"${original}" 已添加到记忆列表`);
         return;
       }
 
       // 立即触发翻译处理（等待完成以确保翻译结果正确应用到页面）
       try {
-        const count = await processSpecificWords([trimmedWord]);
+        const count = await processSpecificWords([original]);
 
         if (count > 0) {
-          showToast(`"${trimmedWord}" 已添加到记忆列表并翻译`);
+          showToast(`"${original}" 已添加到记忆列表并翻译`);
         } else {
           // 即使页面上没有找到，也要确保翻译结果被缓存，以便下次加载时使用
           try {
-            await translateSpecificWords([trimmedWord]);
-            showToast(`"${trimmedWord}" 已添加到记忆列表`);
+            await translateSpecificWords([original]);
+            showToast(`"${original}" 已添加到记忆列表`);
           } catch (error) {
-            console.error('[VocabMeld] Error translating word:', trimmedWord, error);
-            showToast(`"${trimmedWord}" 已添加到记忆列表`);
+            console.error('[VocabMeld] Error translating word:', original, error);
+            showToast(`"${original}" 已添加到记忆列表`);
           }
         }
       } catch (error) {
-        console.error('[VocabMeld] Error processing word:', trimmedWord, error);
-        showToast(`"${trimmedWord}" 已添加到记忆列表`);
+        console.error('[VocabMeld] Error processing word:', original, error);
+        showToast(`"${original}" 已添加到记忆列表`);
       }
     } else {
-      showToast(`"${trimmedWord}" 已在记忆列表中`);
+      showToast(`"${original}" 已在记忆列表中`);
     }
   }
+
 
   async function removeFromMemorizeList(word) {
     if (!word || !word.trim()) return;
 
     const trimmedWord = word.trim();
     const list = config.memorizeList || [];
-    const newList = list.filter(w => w.word !== trimmedWord);
+    // 同时匹配 word 和 original 字段，兼容新旧数据结构
+    const newList = list.filter(w => w.word !== trimmedWord && w.original !== trimmedWord);
 
     if (newList.length !== list.length) {
       config.memorizeList = newList;
@@ -527,6 +542,7 @@
       showToast(`"${trimmedWord}" 已从记忆列表移除`);
     }
   }
+
 
   // ============ DOM 处理 ============
   function shouldSkipNode(node, skipStyleCheck = false) {
@@ -2453,9 +2469,9 @@ ${sourceLang} → ${targetLang}
 
     tooltip.innerHTML = `
       <div class="vocabmeld-tooltip-header">
-        <span class="vocabmeld-tooltip-word">${translation}</span>
-        <span class="vocabmeld-tooltip-badge" data-difficulty="${difficulty}">${difficulty}</span>
-        <button class="vocabmeld-tooltip-btn vocabmeld-btn-memorize ${isInMemorizeList ? 'active' : ''}" data-original="${original}" title="${isInMemorizeList ? '已在记忆列表' : '添加到记忆列表'}">
+        <span class="vocabmeld-tooltip-word">${translation || ''}</span>
+        <span class="vocabmeld-tooltip-badge" data-difficulty="${difficulty || 'B1'}">${difficulty || 'B1'}</span>
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-memorize ${isInMemorizeList ? 'active' : ''}" data-original="${original || ''}" data-translation="${translation || ''}" data-phonetic="${phonetic || ''}" data-difficulty="${difficulty || 'B1'}" title="${isInMemorizeList ? '已在记忆列表' : '添加到记忆列表'}">
           <svg viewBox="0 0 24 24" width="18" height="18">
             ${isInMemorizeList
         ? '<circle cx="12" cy="12" r="10" fill="#22c55e"/><path stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none" d="M7 12.5L10.5 16L17 9"/>'
@@ -2465,17 +2481,17 @@ ${sourceLang} → ${targetLang}
         </button>
       </div>
       ${phonetic && config.showPhonetic ? `
-      <div class="vocabmeld-tooltip-phonetic vocabmeld-btn-speak" data-original="${original}" data-translation="${translation}" title="点击发音">
+      <div class="vocabmeld-tooltip-phonetic vocabmeld-btn-speak" data-original="${original || ''}" data-translation="${translation || ''}" title="点击发音">
         <svg viewBox="0 0 24 24" width="12" height="12">
           <path fill="currentColor" d="M14,3.23V5.29C16.89,6.15 19,8.83 19,12C19,15.17 16.89,17.84 14,18.7V20.77C18,19.86 21,16.28 21,12C21,7.72 18,4.14 14,3.23M16.5,12C16.5,10.23 15.5,8.71 14,7.97V16C15.5,15.29 16.5,13.76 16.5,12M3,9V15H7L12,20V4L7,9H3Z"/>
         </svg>
         <span>${phonetic}</span>
       </div>
       ` : ''}
-      <div class="vocabmeld-tooltip-original">原文: ${original}</div>
+      <div class="vocabmeld-tooltip-original">原文: ${original || ''}</div>
       <div class="vocabmeld-tooltip-dict"></div>
       <div class="vocabmeld-tooltip-actions">
-        <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${original}" data-translation="${translation}" data-difficulty="${difficulty}" title="标记已学会">
+        <button class="vocabmeld-tooltip-btn vocabmeld-btn-learned" data-original="${original || ''}" data-translation="${translation || ''}" data-difficulty="${difficulty || 'B1'}" title="标记已学会">
           <svg viewBox="0 0 24 24" width="16" height="16">
             <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4L2 9l10 5 10-5-10-5zM2 9v6M6 11v6c0 0 2 3 6 3s6-3 6-3v-6"/>
           </svg>
@@ -2684,10 +2700,14 @@ ${sourceLang} → ${targetLang}
         e.preventDefault();
         e.stopPropagation();
         const original = memorizeBtn.getAttribute('data-original');
+        const translation = memorizeBtn.getAttribute('data-translation') || '';
+        const phonetic = memorizeBtn.getAttribute('data-phonetic') || '';
+        const difficulty = memorizeBtn.getAttribute('data-difficulty') || 'B1';
         const isActive = memorizeBtn.classList.contains('active');
 
         if (!isActive) {
-          addToMemorizeList(original);
+          addToMemorizeList({ original, translation, phonetic, difficulty });
+
           memorizeBtn.classList.add('active');
           memorizeBtn.title = '已在记忆列表';
           // 更新图标为绿色背景的对勾

@@ -111,8 +111,18 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (word && word.length < 50) {
       chrome.storage.local.get('memorizeList', (result) => {
         const list = result.memorizeList || [];
-        if (!list.some(w => w.word === word)) {
-          list.push({ word, addedAt: Date.now() });
+        // 检查是否已存在（兼容新旧数据结构）
+        if (!list.some(w => w.word === word || w.original === word)) {
+          // 使用新的数据结构，与 content.js 中的 addToMemorizeList 保持一致
+          // 注意：右键菜单只有原文，没有翻译信息（翻译会在页面处理时获取）
+          list.push({
+            word: word,       // 保持兼容性
+            original: word,   // 原文
+            translation: '',  // 右键菜单添加时没有翻译，留空
+            phonetic: '',     // 右键菜单添加时没有音标，留空
+            difficulty: 'B1', // 默认难度
+            addedAt: Date.now()
+          });
           chrome.storage.local.set({ memorizeList: list }, () => {
             // 通知 content script 处理特定单词
             chrome.tabs.sendMessage(tab.id, {
@@ -126,6 +136,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       });
     }
   }
+
 
   if (info.menuItemId === 'vocabmeld-process-page') {
     chrome.tabs.sendMessage(tab.id, { action: 'processPage' });
