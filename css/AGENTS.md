@@ -4,6 +4,6 @@ Chrome Extension 各页面和组件的样式定义。
 
 | 文件 | 地位 | 功能 |
 |------|------|------|
-| `content.css` | 核心 | 内容脚本样式，词汇标注、tooltip |
+| `content.css` | 核心 | 内容脚本样式，词汇标注、tooltip、处理中指示器（跨站点自转防御） |
 | `options.css` | 页面 | 设置页面样式 |
 | `popup.css` | 页面 | 弹出窗口样式 |

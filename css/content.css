@@ -2,7 +2,7 @@
  * VocabMeld Content 样式 - 注入到页面中
  * 
  * @input  content.js 动态注入的类名
- * @output 词汇标注样式、tooltip、toast、主题适配
+ * @output 词汇标注样式、tooltip、toast、主题适配、处理中指示器（跨站点自转防御）
  * @pos    样式层，定义内容脚本的视觉呈现
  * 
  * 一旦我被更新，务必更新我的开头注释，以及 css/AGENTS.md
@@ -16,10 +16,72 @@
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes vocabmeld-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes vocabmeld-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* 处理中指示器 */
+.vocabmeld-processing-indicator {
+  display: inline-block !important;
+  width: 14px !important;
+  height: 14px !important;
+  margin-left: 6px !important;
+  vertical-align: middle !important;
+  opacity: 0.5 !important;
+  pointer-events: none !important;
+  /* 确保围绕自身中心旋转，防止"公转"问题 */
+  transform-origin: center center !important;
+  box-sizing: border-box !important;
+  /* 防止被其他样式干扰 */
+  position: relative !important;
+  top: 0 !important;
+  left: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  line-height: 1 !important;
+  font-size: 14px !important;
+}
+
+.vocabmeld-processing-indicator svg {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  /* 将旋转固定在 SVG 内部，避免某些站点上出现“公转”视觉偏移 */
+  animation: vocabmeld-spin 1.2s linear infinite !important;
+  transform-origin: 50% 50% !important;
+  transform-box: fill-box !important;
+  position: static !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+}
+
+/* 淡出动画 */
+.vocabmeld-processing-indicator.vocabmeld-fade-out {
+  animation: vocabmeld-fade-out 0.3s ease-out forwards !important;
 }
 
 /* 悬停效果 - 背景色由 content.js 动态生成以支持配色切换 */
@@ -70,7 +132,7 @@
   .vocabmeld-translated {
     border-bottom-color: rgba(129, 140, 248, 0.6);
   }
-  
+
   .vocabmeld-translated:hover {
     background: rgba(129, 140, 248, 0.15);
   }
@@ -195,18 +257,23 @@
 .vocabmeld-tooltip .vocabmeld-tooltip-badge[data-difficulty="A1"] {
   background: #22c55e !important;
 }
+
 .vocabmeld-tooltip .vocabmeld-tooltip-badge[data-difficulty="A2"] {
   background: #3b82f6 !important;
 }
+
 .vocabmeld-tooltip .vocabmeld-tooltip-badge[data-difficulty="B1"] {
   background: #fbbf24 !important;
 }
+
 .vocabmeld-tooltip .vocabmeld-tooltip-badge[data-difficulty="B2"] {
   background: #f97316 !important;
 }
+
 .vocabmeld-tooltip .vocabmeld-tooltip-badge[data-difficulty="C1"] {
   background: #ef4444 !important;
 }
+
 .vocabmeld-tooltip .vocabmeld-tooltip-badge[data-difficulty="C2"] {
   background: #a855f7 !important;
 }
@@ -456,17 +523,18 @@
 
 /* 打印时隐藏 */
 @media print {
+
   .vocabmeld-tooltip,
   .vocabmeld-toast,
   .vocabmeld-selection-popup {
     display: none !important;
   }
-  
+
   .vocabmeld-translated .vocabmeld-word {
     color: inherit;
     text-decoration: none;
   }
-  
+
   .vocabmeld-translated .vocabmeld-original {
     display: none;
   }

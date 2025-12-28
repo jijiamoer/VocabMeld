@@ -1,6 +1,6 @@
 /**
  * VocabMeld 内容脚本
- * 注入到网页中，处理词汇替换、用户交互与段落级缓存复用（已移除词级缓存）
+ * 注入到网页中，处理词汇替换、用户交互与段落级缓存复用（已移除词级缓存，含处理中指示器：自转防御、行内插入防错位、链接内不越界可清理、处理锁与 UI 解耦+30s 超时兜底、LLM 请求 60s 硬超时）
  * 
  * @input  网页 DOM、chrome.storage 配置、background.js API 响应
  * @output 词汇替换 DOM、tooltip、用户交互事件
@@ -647,6 +647,269 @@
   }
 
   // ============ 文本替换 ============
+
+  // 获取当前主题色（用于处理指示器）
+  function sanitizeIndicatorColor(rawColor) {
+    const fallback = '#6366f1';
+    if (typeof rawColor !== 'string') return fallback;
+    const color = rawColor.trim();
+
+    if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) return color;
+
+    const rgbMatch = color.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(0|1|0?\.\d+))?\s*\)$/);
+    if (!rgbMatch) return fallback;
+
+    const r = Number(rgbMatch[1]);
+    const g = Number(rgbMatch[2]);
+    const b = Number(rgbMatch[3]);
+    const a = rgbMatch[4] !== undefined ? Number(rgbMatch[4]) : 1;
+
+    const isByte = (n) => Number.isFinite(n) && n >= 0 && n <= 255;
+    const isAlpha = (n) => Number.isFinite(n) && n >= 0 && n <= 1;
+    if (!isByte(r) || !isByte(g) || !isByte(b) || !isAlpha(a)) return fallback;
+
+    return color;
+  }
+
+  function getThemePrimaryColor() {
+    const themeId = config?.colorTheme || 'default';
+    const theme = themeId === 'custom' && config?.customTheme
+      ? config.customTheme
+      : BUILT_IN_THEMES[themeId] || BUILT_IN_THEMES.default;
+    return sanitizeIndicatorColor(theme.primary || '#6366f1');
+  }
+
+  // 将指示器尽量插入到“最后一个有效文本节点”之后，避免容器为 flex/column 时被渲染到新行或段落底部
+  function insertProcessingIndicatorInline(container, indicator) {
+    if (!container || !indicator) return false;
+
+    // 当容器本身位于 <a> 内部时，如果把指示器插到 <a> 外部，会导致 hideProcessingIndicator(container) 无法清理。
+    // 因此该场景允许在链接内部插入指示器，以保证可回收（代价是链接内容会临时包含 spinner）。
+    const containerAnchorEl = container.closest?.('a');
+    const containerInsideAnchor = !!(containerAnchorEl && containerAnchorEl !== container);
+
+    // 仅在这里做一次轻量的样式判断，避免对每个文本节点都调用 getComputedStyle
+    function isFlexContainer(el) {
+      try {
+        const display = window.getComputedStyle(el).display;
+        return display === 'flex' || display === 'inline-flex';
+      } catch {
+        return false;
+      }
+    }
+
+    function isInInteractiveControl(el) {
+      try {
+        return !!el.closest('a,[role="link"],button,[role="button"],input,textarea,select,option,label');
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      // 快速路径：仅在 flex/inline-flex 容器内做“行内插入”，其他情况直接回退到 appendChild
+      if (!isFlexContainer(container)) return false;
+
+      // 逆向查找末尾的有效文本节点（从容器末尾往前，避免 TreeWalker 正向扫描带来的性能开销）
+      function getDeepLastNode(node) {
+        let current = node;
+        while (current && current.lastChild) current = current.lastChild;
+        return current;
+      }
+
+      function getPreviousNode(node) {
+        if (!node) return null;
+        if (node.previousSibling) return getDeepLastNode(node.previousSibling);
+        const parent = node.parentNode;
+        if (!parent || parent === container) return null;
+        return getPreviousNode(parent);
+      }
+
+      let lastTextNode = null;
+      let lastTextNodeAnchorEl = null;
+      let cursor = container.lastChild ? getDeepLastNode(container.lastChild) : null;
+      while (cursor) {
+        if (cursor.nodeType === Node.TEXT_NODE) {
+          const parent = cursor.parentElement;
+          if (parent && cursor.textContent && cursor.textContent.trim().length > 0 && !shouldSkipNode(parent)) {
+            const anchorEl = parent.closest?.('a');
+            if (anchorEl && anchorEl.parentNode) {
+              lastTextNode = cursor;
+              lastTextNodeAnchorEl = anchorEl;
+              break;
+            }
+            if (!isInInteractiveControl(parent)) {
+              lastTextNode = cursor;
+              break;
+            }
+          }
+        }
+        cursor = getPreviousNode(cursor);
+      }
+      if (!lastTextNode) return false;
+
+      // 默认避免把指示器插到链接内部（会扩大链接内容/复制文本时夹带）。
+      // 但若容器本身就在链接内部，则不能把指示器插到链接外（否则会跑到容器外，后续无法清理）。
+      if (lastTextNodeAnchorEl && lastTextNodeAnchorEl.parentNode) {
+        const shouldInsertOutsideAnchor = !(containerInsideAnchor && lastTextNodeAnchorEl.contains(container));
+        if (shouldInsertOutsideAnchor) {
+          lastTextNodeAnchorEl.parentNode.insertBefore(indicator, lastTextNodeAnchorEl.nextSibling);
+          return true;
+        }
+      }
+
+      // 若文本节点直接处在 flex 容器内，插入元素会成为新的 flex item -> 可能掉到新行/底部
+      // 这里用最小改动包一层 span，把“文本+指示器”放到同一个 flex item 内
+      let insertionContainer = lastTextNode.parentElement;
+      let insertionTextNode = lastTextNode;
+      if (insertionContainer && isFlexContainer(insertionContainer)) {
+        const wrap = document.createElement('span');
+        wrap.setAttribute('data-vocabmeld-inline-wrap', 'true');
+        wrap.style.setProperty('display', 'inline', 'important');
+        wrap.style.setProperty('white-space', 'inherit', 'important');
+        insertionContainer.insertBefore(wrap, insertionTextNode);
+        wrap.appendChild(insertionTextNode);
+        insertionContainer = wrap;
+        insertionTextNode = wrap.firstChild;
+      }
+
+      const range = document.createRange();
+      const textLength = insertionTextNode?.textContent?.length || 0;
+      range.setStart(insertionTextNode, textLength);
+      range.collapse(true);
+      range.insertNode(indicator);
+      return true;
+    } catch (e) {
+      console.warn('[VocabMeld] 行内插入处理中指示器失败，将回退到 appendChild：', e);
+      return false;
+    }
+  }
+
+  // 显示处理中指示器
+  function showProcessingIndicator(element) {
+    if (!element || element.querySelector('.vocabmeld-processing-indicator')) return;
+
+    // 容器本身是 <a> 时，指示器可能作为兄弟节点插在链接之后，需单独判重
+    if (element.tagName === 'A' && element.nextSibling?.classList?.contains('vocabmeld-processing-indicator')) {
+      element.setAttribute('data-vocabmeld-processing', 'true');
+      return;
+    }
+
+    const indicator = document.createElement('span');
+    indicator.className = 'vocabmeld-processing-indicator';
+    const color = getThemePrimaryColor();
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+
+    const circle = document.createElementNS(svgNs, 'circle');
+    circle.setAttribute('cx', '12');
+    circle.setAttribute('cy', '12');
+    circle.setAttribute('r', '10');
+    circle.setAttribute('stroke', color);
+    circle.setAttribute('stroke-width', '2.5');
+    circle.setAttribute('stroke-dasharray', '31.4 31.4');
+    circle.setAttribute('stroke-linecap', 'round');
+    circle.setAttribute('opacity', '0.8');
+
+    svg.appendChild(circle);
+    indicator.appendChild(svg);
+
+    element.setAttribute('data-vocabmeld-processing', 'true');
+
+    // 避免把指示器插到链接内部（例如容器本身是 <a>）
+    if (element.tagName === 'A' && element.parentNode) {
+      element.parentNode.insertBefore(indicator, element.nextSibling);
+    } else {
+      // 优先行内插入到最后一个文本节点之后，确保在 X.com 等 flex 结构中仍紧跟段落最后一个字
+      const inserted = insertProcessingIndicatorInline(element, indicator);
+      if (!inserted) {
+        element.appendChild(indicator);
+      }
+    }
+
+    // 防御性样式：部分复杂站点可能对 svg/circle 施加 transform/transform-origin，导致旋转出现“公转”
+    const svgEl = indicator.querySelector('svg');
+    if (svgEl) {
+      svgEl.style.setProperty('animation', 'vocabmeld-spin 1.2s linear infinite', 'important');
+      svgEl.style.setProperty('transform-origin', '50% 50%', 'important');
+      svgEl.style.setProperty('transform-box', 'fill-box', 'important');
+      svgEl.style.setProperty('display', 'block', 'important');
+      svgEl.style.setProperty('width', '100%', 'important');
+      svgEl.style.setProperty('height', '100%', 'important');
+    }
+  }
+
+  // 查找指示器元素的辅助函数
+  function findProcessingIndicator(element) {
+    if (!element) return null;
+    let indicator = element.querySelector?.('.vocabmeld-processing-indicator') || null;
+
+    // 兼容：指示器作为 element 的紧邻兄弟节点（例如 element 本身是 <a> 时）
+    if (!indicator && element.nextSibling?.classList?.contains?.('vocabmeld-processing-indicator')) {
+      indicator = element.nextSibling;
+    }
+
+    // 兼容历史 bug：当 element 位于 <a> 内部时，指示器曾被插到外层 <a> 之后（跑到 element 外）
+    if (!indicator) {
+      const anchorEl = element.closest?.('a');
+      if (anchorEl && anchorEl !== element) {
+        if (anchorEl.nextSibling?.classList?.contains?.('vocabmeld-processing-indicator')) {
+          indicator = anchorEl.nextSibling;
+        } else {
+          indicator = anchorEl.querySelector?.('.vocabmeld-processing-indicator') || null;
+        }
+      }
+    }
+    return indicator;
+  }
+
+  // 仅隐藏指示器 UI，不移除处理标记（用于 30s 超时场景，防止重复处理）
+  function hideProcessingIndicatorOnly(element) {
+    if (!element) return;
+    const indicator = findProcessingIndicator(element);
+    if (!indicator) return;
+
+    const maybeWrap = indicator.parentElement;
+    indicator.classList.add('vocabmeld-fade-out');
+    setTimeout(() => {
+      indicator.remove();
+      // 注意：不移除 data-vocabmeld-processing，保持处理锁
+      // 尝试清理为 flex 兼容而引入的包裹层（仅在安全可还原时）
+      if (maybeWrap?.getAttribute?.('data-vocabmeld-inline-wrap') === 'true') {
+        const childNodes = Array.from(maybeWrap.childNodes || []);
+        if (childNodes.length === 1 && childNodes[0].nodeType === Node.TEXT_NODE) {
+          maybeWrap.replaceWith(childNodes[0]);
+        }
+      }
+    }, 300);
+  }
+
+  // 隐藏处理中指示器并移除处理标记（用于异步任务完成场景）
+  function hideProcessingIndicator(element) {
+    if (!element) return;
+    const indicator = findProcessingIndicator(element);
+    if (!indicator) {
+      element.removeAttribute('data-vocabmeld-processing');
+      return;
+    }
+
+    const maybeWrap = indicator.parentElement;
+    indicator.classList.add('vocabmeld-fade-out');
+    setTimeout(() => {
+      indicator.remove();
+      element.removeAttribute('data-vocabmeld-processing');
+      // 尝试清理为 flex 兼容而引入的包裹层（仅在安全可还原时）
+      if (maybeWrap?.getAttribute?.('data-vocabmeld-inline-wrap') === 'true') {
+        const childNodes = Array.from(maybeWrap.childNodes || []);
+        if (childNodes.length === 1 && childNodes[0].nodeType === Node.TEXT_NODE) {
+          maybeWrap.replaceWith(childNodes[0]);
+        }
+      }
+    }, 300);
+  }
+
   function createReplacementElement(original, translation, phonetic, difficulty) {
     const wrapper = document.createElement('span');
     wrapper.className = 'vocabmeld-translated';
@@ -828,8 +1091,11 @@
   }
 
   // ============ API 调用 ============
+  const LLM_REQUEST_TIMEOUT_MS = 60000; // LLM 请求硬超时（毫秒），确保 Promise 必定 settle
+
   async function sendLlmRequest(messages, options = {}) {
-    return new Promise((resolve, reject) => {
+    // 实际请求 Promise
+    const requestPromise = new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
         {
           action: 'llmRequest',
@@ -854,6 +1120,15 @@
         }
       );
     });
+
+    // 超时 Promise，确保不会永远 pending
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('LLM 请求超时（60s）'));
+      }, LLM_REQUEST_TIMEOUT_MS);
+    });
+
+    return Promise.race([requestPromise, timeoutPromise]);
   }
 
   async function translateText(text, batchSize = 1) {
@@ -1437,6 +1712,55 @@ ${sourceLang} → ${targetLang}
 
   // ============ 页面处理 ============
   const REQUEST_INTERVAL_MS = 2000; // API请求间隔（毫秒），避免触发速率限制
+  const INDICATOR_FORCE_HIDE_TIMEOUT_MS = 30000; // 指示器超时兜底（毫秒），避免极端情况下不消失
+
+  // 指示器生命周期与处理锁解耦：不阻塞后续 batch
+  // 30s 超时只隐藏 UI，不解除处理锁（防止重复处理）；异步完成后才移除处理标记
+  function scheduleProcessingIndicatorsHide(segments, asyncPromises) {
+    const elements = (segments || []).map(s => s.element).filter(Boolean);
+    if (elements.length === 0) return;
+
+    const hasAsync = Array.isArray(asyncPromises) && asyncPromises.length > 0;
+    if (!hasAsync) {
+      // 没有异步任务时无需启动 30s 兜底计时器，直接隐藏并解锁即可
+      for (const el of elements) {
+        hideProcessingIndicator(el);
+      }
+      return;
+    }
+
+    let didTimeout = false;
+    let timeoutId = null;
+
+    // 30s 超时：只隐藏 UI，不解除处理锁
+    timeoutId = setTimeout(() => {
+      didTimeout = true;
+      console.warn('[VocabMeld] 指示器等待异步翻译超时，已强制隐藏 UI（处理锁保持以防重复处理）。');
+      for (const el of elements) {
+        hideProcessingIndicatorOnly(el);
+      }
+    }, INDICATOR_FORCE_HIDE_TIMEOUT_MS);
+
+    // 异步任务完成后：完全清理（隐藏 UI + 解除处理锁）
+    const waitAsync = Promise.allSettled(asyncPromises).catch(() => { });
+    waitAsync.finally(() => {
+      // 清除超时计时器（如果还没触发）
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      // 完全清理：隐藏 UI 并解除处理锁
+      for (const el of elements) {
+        if (didTimeout) {
+          // 超时已隐藏 UI，现在只需解除处理锁
+          el.removeAttribute('data-vocabmeld-processing');
+        } else {
+          // 正常完成，隐藏 UI 并解除处理锁
+          hideProcessingIndicator(el);
+        }
+      }
+    });
+  }
 
   // 使用 IntersectionObserver 实现懒加载
   function setupIntersectionObserver() {
@@ -1455,6 +1779,10 @@ ${sourceLang} → ${targetLang}
           const container = entry.target;
           // 跳过已处理的容器
           if (container.hasAttribute('data-vocabmeld-processed')) {
+            continue;
+          }
+          // 跳过仍在处理中（指示器未清理）的容器，避免重复入队
+          if (container.hasAttribute('data-vocabmeld-processing')) {
             continue;
           }
 
@@ -1483,6 +1811,7 @@ ${sourceLang} → ${targetLang}
 
     isProcessing = true;
 
+    let segments = [];
     try {
       const containers = Array.from(pendingContainers).slice(0, MAX_SEGMENTS_PER_BATCH);
       // 只移除本次要处理的容器，保留后续添加的
@@ -1491,7 +1820,6 @@ ${sourceLang} → ${targetLang}
       }
 
       // 收集需要处理的段落
-      const segments = [];
       const whitelistWords = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
 
       for (const container of containers) {
@@ -1499,6 +1827,7 @@ ${sourceLang} → ${targetLang}
         container.removeAttribute('data-vocabmeld-observing');
 
         if (container.hasAttribute('data-vocabmeld-processed')) continue;
+        if (container.hasAttribute('data-vocabmeld-processing')) continue;
 
         const text = getTextContent(container);
         if (!text || text.length < 50) continue;
@@ -1520,6 +1849,13 @@ ${sourceLang} → ${targetLang}
         }
       }
 
+      // 在开始处理前，为所有待处理段落显示指示器
+      for (const segment of segments) {
+        showProcessingIndicator(segment.element);
+      }
+
+      const asyncPromises = [];
+
       // 根据字符数动态分批，而非固定段落数
       const maxBatchChars = config.maxBatchChars || 3000;
       let currentBatch = [];
@@ -1530,7 +1866,8 @@ ${sourceLang} → ${targetLang}
 
         // 如果加上当前段落会超限，先发送当前batch
         if (currentChars + segmentLength > maxBatchChars && currentBatch.length > 0) {
-          await processBatchSegments(currentBatch, whitelistWords);
+          const batchAsyncPromises = await processBatchSegments(currentBatch, whitelistWords);
+          asyncPromises.push(...batchAsyncPromises);
           await new Promise(resolve => setTimeout(resolve, REQUEST_INTERVAL_MS));
           currentBatch = [];
           currentChars = 0;
@@ -1543,8 +1880,18 @@ ${sourceLang} → ${targetLang}
 
       // 处理最后一批
       if (currentBatch.length > 0) {
-        await processBatchSegments(currentBatch, whitelistWords);
+        const batchAsyncPromises = await processBatchSegments(currentBatch, whitelistWords);
+        asyncPromises.push(...batchAsyncPromises);
       }
+
+      // 批处理循环结束后立即释放处理锁；指示器由独立逻辑在异步完成（或超时）后隐藏
+      scheduleProcessingIndicatorsHide(segments, asyncPromises);
+    } catch (e) {
+      // 出错时也要隐藏所有指示器
+      for (const segment of segments) {
+        hideProcessingIndicator(segment.element);
+      }
+      console.error('[VocabMeld] Processing error:', e);
     } finally {
       isProcessing = false;
 
@@ -1556,16 +1903,18 @@ ${sourceLang} → ${targetLang}
   }, 100);
 
   // 批量处理多个段落（合并为一个API请求）
+  // 注意：指示器的显示/隐藏由调用方 processPendingContainers 统一管理
   async function processBatchSegments(segments, whitelistWords) {
-    if (segments.length === 0) return;
-
-    // 使用 XML 标签分隔段落，消除 AI 理解歧义
-    const combinedText = segments
-      .map((s, index) => `<segment id="${index + 1}">\n${s.filteredText}\n</segment>`)
-      .join('\n\n');
+    if (segments.length === 0) return [];
 
     try {
+      // 使用 XML 标签分隔段落，消除 AI 理解歧义
+      const combinedText = segments
+        .map((s, index) => `<segment id="${index + 1}">\n${s.filteredText}\n</segment>`)
+        .join('\n\n');
+
       const result = await translateText(combinedText, segments.length);
+      const asyncPromises = [];
 
       // 将翻译结果分配给各个段落
       const allReplacements = [...(result.immediate || [])];
@@ -1589,7 +1938,7 @@ ${sourceLang} → ${targetLang}
 
       // 处理异步结果
       if (result.async) {
-        result.async.then(asyncReplacements => {
+        const asyncWork = result.async.then(asyncReplacements => {
           if (asyncReplacements?.length) {
             for (const segment of segments) {
               const segmentText = segment.text.toLowerCase();
@@ -1616,9 +1965,13 @@ ${sourceLang} → ${targetLang}
         }).catch(error => {
           console.error('[VocabMeld] Async translation error:', error);
         });
+        asyncPromises.push(asyncWork);
       }
-    } catch (e) {
-      console.error('[VocabMeld] Batch processing error:', e);
+
+      return asyncPromises;
+    } catch (error) {
+      console.error('[VocabMeld] 批量段落处理失败（已跳过该批次，避免影响其他批次）：', error);
+      return [];
     }
   }
 
@@ -1660,6 +2013,10 @@ ${sourceLang} → ${targetLang}
     for (const container of containers) {
       // 跳过已处理的容器
       if (container.hasAttribute('data-vocabmeld-processed')) {
+        continue;
+      }
+      // 跳过仍在处理中（指示器未清理）的容器，避免重复入队
+      if (container.hasAttribute('data-vocabmeld-processing')) {
         continue;
       }
 
