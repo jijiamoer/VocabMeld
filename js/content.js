@@ -1,6 +1,6 @@
 /**
  * VocabMeld 内容脚本
- * 注入到网页中，处理词汇替换、用户交互与段落级缓存复用（已移除词级缓存，含处理中指示器：自转防御、行内插入防错位、链接内不越界可清理、处理锁与 UI 解耦+30s 超时兜底、LLM 请求 60s 硬超时）
+ * 注入到网页中，处理词汇替换、用户交互与段落级缓存复用（已移除词级缓存；支持记忆词汇融入批量翻译；划词/右键仅翻译显示，通过悬浮卡片“+”决定是否加入记忆列表；含处理中指示器：自转防御、行内插入防错位、链接内不越界可清理、处理锁与 UI 解耦+30s 超时兜底、LLM 请求 60s 硬超时）
  * 
  * @input  网页 DOM、chrome.storage 配置、background.js API 响应
  * @output 词汇替换 DOM、tooltip、用户交互事件
@@ -80,7 +80,7 @@
   let tooltipHideTimeout = null; // tooltip 延迟隐藏计时器
   let currentTooltipElement = null; // 当前显示 tooltip 的元素
   // 右键菜单选区缓存（用于获取上下文）
-  let lastContextMenuSelection = { text: '', context: '', at: 0 };
+  let lastContextMenuSelection = { text: '', context: '', element: null, at: 0 };
 
   // ============ 工具函数 ============
   function isDifficultyCompatible(wordDifficulty, userDifficulty) {
@@ -509,7 +509,7 @@
           console.error('[VocabMeld] Error completing translation:', original, error);
         }
       }
-      showToast(`"${original}" 已在记忆列表中`);
+      showToast(`"${original}" 已收藏 (${existing.translation || '无翻译'})`);
       return;
     }
 
@@ -529,10 +529,20 @@
         }
       } catch (error) {
         console.error('[VocabMeld] Error translating word:', original, error);
+        // 翻译失败时提示用户，不添加到列表
+        showToast(`翻译失败，请稍后重试`);
+        return;
       }
     }
 
+    // 翻译成功后才添加到列表
+    if (!translation) {
+      showToast(`翻译失败，请稍后重试`);
+      return;
+    }
+
     // 一次性写入 storage（包含翻译结果）
+    // 注意：为避免并发覆盖（例如用户快速连续收藏多个词），写入前再读一次 storage 并做 merge。
     const newEntry = {
       word: original,
       original: original,
@@ -541,16 +551,47 @@
       difficulty: difficulty,
       addedAt: Date.now()
     };
-    list.push(newEntry);
-    config.memorizeList = list;
-    await new Promise(resolve => chrome.storage.local.set({ memorizeList: list }, resolve));
 
-    // 不在这里调用 processSpecificWords，交给 onChanged 处理，避免重复处理
-    if (translation) {
-      showToast(`"${original}" 已添加到记忆列表并翻译`);
-    } else {
-      showToast(`"${original}" 已添加到记忆列表`);
-    }
+    await new Promise(resolve => {
+      chrome.storage.local.get(['memorizeList'], (res) => {
+        const latestList = Array.isArray(res?.memorizeList)
+          ? res.memorizeList
+          : (config.memorizeList || []);
+
+        const idx = latestList.findIndex(w =>
+          (w.word || '').toLowerCase() === lowerOriginal ||
+          (w.original || '').toLowerCase() === lowerOriginal
+        );
+
+        // 竞态：如果在翻译期间被其他流程添加了同词汇，则这里补全翻译（如需要）后直接返回
+        if (idx >= 0) {
+          const existing = latestList[idx] || {};
+          let nextList = latestList;
+          if (!existing.translation && translation) {
+            nextList = [...latestList];
+            nextList[idx] = {
+              ...existing,
+              translation,
+              phonetic,
+              difficulty
+            };
+          }
+          config.memorizeList = nextList;
+          chrome.storage.local.set({ memorizeList: nextList }, () => {
+            showToast(`"${original}" 已收藏 (${(nextList[idx]?.translation) || '无翻译'})`);
+            resolve();
+          });
+          return;
+        }
+
+        const nextList = [...latestList, newEntry];
+        config.memorizeList = nextList;
+        chrome.storage.local.set({ memorizeList: nextList }, () => {
+          showToast(`${original} → ${translation}`);
+          resolve();
+        });
+      });
+    });
   }
 
 
@@ -566,6 +607,47 @@
       config.memorizeList = newList;
       await new Promise(resolve => chrome.storage.local.set({ memorizeList: newList }, resolve));
       showToast(`"${trimmedWord}" 已从记忆列表移除`);
+    }
+  }
+
+
+  // ============ 只翻译并显示（不加入记忆列表） ============
+  // 用于划词弹窗和右键菜单的"翻译"功能
+  async function translateAndShow(word, parentElement = null, contextText = '') {
+    if (!word || !word.trim()) return null;
+
+    const text = word.trim();
+    showToast(`翻译中...`);
+
+    try {
+      // 如果没有传入上下文，尝试从 parentElement 获取
+      const context = contextText || parentElement?.textContent?.slice(0, 500) || '';
+
+      // 调用翻译
+      const result = await translateWordWithContext(text, context);
+
+      if (result && result.translation) {
+        // 翻译成功，应用到页面
+        if (parentElement) {
+          const replacements = [{
+            original: text,
+            translation: result.translation,
+            phonetic: result.phonetic || '',
+            difficulty: result.difficulty || 'B1',
+            position: 0
+          }];
+          applyReplacements(parentElement, replacements);
+        }
+        showToast(`${text} → ${result.translation}`);
+        return result;
+      } else {
+        showToast(`翻译失败，请稍后重试`);
+        return null;
+      }
+    } catch (error) {
+      console.error('[VocabMeld] translateAndShow error:', error);
+      showToast(`翻译失败，请稍后重试`);
+      return null;
     }
   }
 
@@ -1196,11 +1278,37 @@
     const targetLang = isNative ? config.targetLanguage : config.nativeLanguage;
     const maxReplacements = INTENSITY_CONFIG[config.intensity]?.maxPerParagraph || 8;
 
-    // ============ 请求级缓存（段落级/合并请求级） ============
+    // ============ 检测段落中命中的记忆词汇 ============
+    // 注意：这里会在每个段落调用一次，尽量保持轻量；同时做去重，避免 prompt 过长。
+    const lowerText = text.toLowerCase();
+    const relevantMemorizeWords = [];
+    const seenRelevantMemorizeWords = new Set();
+    for (const w of (config.memorizeList || [])) {
+      const rawWord = (w.word || w.original || '').trim();
+      if (!rawWord) continue;
+
+      const lowerWord = rawWord.toLowerCase();
+      if (seenRelevantMemorizeWords.has(lowerWord)) continue;
+
+      // 英文词使用词边界匹配，避免子串误命中
+      const isEnglish = /^[a-zA-Z]+$/.test(lowerWord);
+      const isHit = isEnglish
+        ? new RegExp(`\\b${lowerWord}\\b`, 'i').test(text)
+        : lowerText.includes(lowerWord); // 中文/非纯英文词使用 includes
+
+      if (!isHit) continue;
+      seenRelevantMemorizeWords.add(lowerWord);
+      relevantMemorizeWords.push(rawWord);
+    }
+    const memorizeHash = relevantMemorizeWords.length > 0
+      ? relevantMemorizeWords.map(w => w.toLowerCase()).sort().join('|')
+      : '';
+
+    // ============ 请求级缓存（段落级 + 记忆词汇哈希） ============
     // Key 以“发送给 AI 的文本内容完全一致”为核心，同时绑定关键配置，避免配置变化导致复用错误结果。
     // 命中后直接复用整次请求的翻译结果，跳过 API 调用，也避免词级缓存导致的词性误替换。
     const segmentCacheKeyMaterial = JSON.stringify({
-      v: 1,
+      v: 2,
       sourceLang,
       targetLang,
       modelName: config.modelName || '',
@@ -1209,6 +1317,7 @@
       difficultyLevel: config.difficultyLevel,
       intensity: config.intensity,
       processMode: config.processMode,
+      memorizeHash,
       text
     });
     const segmentCacheKey = await generateSegmentHash(segmentCacheKeyMaterial);
@@ -1216,9 +1325,12 @@
     const segmentCached = await getSegmentCacheValue(segmentCacheKey);
     if (segmentCached) {
       const learnedWordsSet = new Set((config.learnedWords || []).map(w => w.original.toLowerCase()));
+      const memorizeWordsSet = new Set(relevantMemorizeWords.map(w => w.toLowerCase()));
       const filterReplacement = (item) => {
         if (!item?.original || !item?.translation) return false;
         if (learnedWordsSet.has(item.original.toLowerCase())) return false;
+        // 记忆词汇豁免难度过滤（即使缓存命中也必须保留）
+        if (memorizeWordsSet.has(item.original.toLowerCase())) return true;
         return isDifficultyCompatible(item.difficulty || 'B1', config.difficultyLevel);
       };
 
@@ -1278,8 +1390,12 @@ ${batchInfo}
 从下面文本中选择少量最值得学习的词/短语并翻译。
 ${targetInfo}
 - 翻译方向：${sourceLang} → ${targetLang}。
-- **考虑用户的水平，如果文本内容过于基础或没有值得学习的词汇，请返回空数组 []，不要为了凑数而翻译简单词汇。**
-
+- **考虑用户的水平，如果没有命中必须翻译的词汇且文本内容过于基础，可以返回空数组 []。但如果有必须翻译的词汇出现在文本中，则至少要翻译这些词汇。**
+${relevantMemorizeWords.length > 0 ? `
+## 必须翻译的词汇（用户记忆列表）
+以下词汇是用户明确要求学习的，如果在文本中出现，请**务必翻译**并包含在返回结果中，无论其难度如何：
+${relevantMemorizeWords.join(', ')}
+` : ''}
 ## 必须遵守（硬约束）
 1) 只输出 JSON 数组。
 2) 每个元素是对象，字段与类型：
@@ -1323,6 +1439,9 @@ ${targetInfo}
         }
 
         // 词级缓存已移除：这里不再写入/读取单词缓存，只做本地过滤确保输出可用。
+        // 记忆词汇集合（用于豁免难度/长度过滤）
+        const memorizeWordsSet = new Set(relevantMemorizeWords.map(w => w.toLowerCase()));
+
         const filteredResults = allResults
           .filter(item => item && typeof item.original === 'string' && typeof item.translation === 'string')
           .map(item => ({
@@ -1331,8 +1450,14 @@ ${targetInfo}
             translation: item.translation.trim()
           }))
           .filter(item => item.original && item.translation)
-          .filter(item => isDifficultyCompatible(item.difficulty || 'B1', config.difficultyLevel))
           .filter(item => {
+            // 记忆词汇豁免难度过滤
+            if (memorizeWordsSet.has(item.original.toLowerCase())) return true;
+            return isDifficultyCompatible(item.difficulty || 'B1', config.difficultyLevel);
+          })
+          .filter(item => {
+            // 记忆词汇豁免长度过滤
+            if (memorizeWordsSet.has(item.original.toLowerCase())) return true;
             const isEnglish = /^[a-zA-Z]+$/.test(item.original);
             if (isEnglish && item.original.length < 5) return false;
             return true;
@@ -1365,6 +1490,67 @@ ${targetInfo}
           async: asyncResults,
           savedAt: Date.now()
         });
+
+        // ============ 回写翻译结果到 memorizeList ============
+        // 如果翻译结果中包含记忆列表词汇，且该词汇尚无翻译，则回写
+        // 注意：为避免并发覆盖（例如用户此时新增/删除记忆词汇），这里在写入前再读一次 storage 并做 merge。
+        if (relevantMemorizeWords.length > 0 && asyncResults.length > 0) {
+          const memorizeSet = new Set(relevantMemorizeWords.map(w => w.toLowerCase()));
+          const pendingUpdates = new Map();
+
+          for (const result of asyncResults) {
+            const lowerOriginal = result.original.toLowerCase();
+            if (!memorizeSet.has(lowerOriginal)) continue;
+            pendingUpdates.set(lowerOriginal, {
+              translation: result.translation,
+              phonetic: result.phonetic || '',
+              difficulty: result.difficulty || 'B1'
+            });
+          }
+
+          if (pendingUpdates.size > 0) {
+            await new Promise(resolve => {
+              chrome.storage.local.get(['memorizeList'], (res) => {
+                const latestList = Array.isArray(res?.memorizeList)
+                  ? res.memorizeList
+                  : (config.memorizeList || []);
+
+                let needUpdate = false;
+                const mergedList = latestList.map(item => {
+                  const raw = (item?.word || item?.original || '').trim();
+                  if (!raw) return item;
+
+                  const key = raw.toLowerCase();
+                  const update = pendingUpdates.get(key);
+                  if (!update) return item;
+
+                  if (item.translation) return item;
+                  needUpdate = true;
+                  return {
+                    ...item,
+                    translation: update.translation,
+                    phonetic: update.phonetic,
+                    difficulty: update.difficulty
+                  };
+                });
+
+                if (!needUpdate) {
+                  resolve();
+                  return;
+                }
+
+                chrome.storage.local.set({ memorizeList: mergedList }, () => {
+                  if (chrome.runtime.lastError) {
+                    console.warn('[VocabMeld] 回写 memorizeList 失败:', chrome.runtime.lastError);
+                  } else {
+                    config.memorizeList = mergedList;
+                  }
+                  resolve();
+                });
+              });
+            });
+          }
+        }
 
         return asyncResults;
 
@@ -2756,23 +2942,35 @@ ${sourceLang} → ${targetLang}
     selectionPopup.className = 'vocabmeld-selection-popup';
     selectionPopup.setAttribute('data-theme', config?.theme || 'dark');
     selectionPopup.style.display = 'none';
-    selectionPopup.innerHTML = '<button class="vocabmeld-add-memorize">添加到需记忆</button>';
+    selectionPopup.innerHTML = '<button class="vocabmeld-add-memorize">翻译</button>';
     document.body.appendChild(selectionPopup);
 
     selectionPopup.querySelector('button').addEventListener('click', async () => {
       const selection = window.getSelection();
       const text = selection.toString().trim();
       if (text && text.length < 50) {
-        // addToMemorizeList 内部会显示 toast，这里不再重复
-        await addToMemorizeList(text);
+        // 获取选区的父元素（用于后续替换）
+        let parentElement = null;
+        if (selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          parentElement = range.commonAncestorContainer.parentElement?.closest('p, div, li, td, article, section')
+            || range.commonAncestorContainer.parentElement;
+        }
+
+        // 立即隐藏弹窗
+        selectionPopup.style.display = 'none';
+
+        // 调用通用翻译函数
+        await translateAndShow(text, parentElement);
+      } else {
+        selectionPopup.style.display = 'none';
       }
-      selectionPopup.style.display = 'none';
     });
   }
 
   // ============ 事件处理 ============
   function setupEventListeners() {
-    // 右键菜单时缓存选区上下文（用于添加到记忆列表）
+    // 右键菜单时缓存选区上下文（用于“翻译文本”）
     document.addEventListener('contextmenu', () => {
       const selection = window.getSelection();
       if (selection && selection.rangeCount > 0) {
@@ -2785,19 +2983,20 @@ ${sourceLang} → ${targetLang}
             lastContextMenuSelection = {
               text: text,
               context: container?.textContent?.trim().slice(0, 500) || '',
+              element: container,
               at: Date.now()
             };
           } catch (e) {
             // 获取上下文失败，仍记录选区文本
-            lastContextMenuSelection = { text: text, context: '', at: Date.now() };
+            lastContextMenuSelection = { text: text, context: '', element: null, at: Date.now() };
           }
         } else {
           // 选区无效（为空或过长），清空缓存防止误用
-          lastContextMenuSelection = { text: '', context: '', at: 0 };
+          lastContextMenuSelection = { text: '', context: '', element: null, at: 0 };
         }
       } else {
         // 没有选区（如 input 内的选区不可获取），清空缓存
-        lastContextMenuSelection = { text: '', context: '', at: 0 };
+        lastContextMenuSelection = { text: '', context: '', element: null, at: 0 };
       }
     });
 
@@ -3045,8 +3244,8 @@ ${sourceLang} → ${targetLang}
           sendResponse({ success: false, error: 'No words provided' });
         }
       }
-      // 右键菜单添加到记忆列表（带上下文）
-      if (message.action === 'addToMemorizeListWithContext') {
+      // 右键菜单翻译（带上下文）
+      if (message.action === 'translateSelectionWithContext') {
         const word = message.word;
         if (word) {
           // 使用缓存的选区上下文（在 contextmenu 事件中缓存）
@@ -3056,15 +3255,16 @@ ${sourceLang} → ${targetLang}
             cached.text.toLowerCase().includes(word.toLowerCase()) &&
             (Date.now() - cached.at < 5000);
           const context = isValid ? cached.context : '';
+          const parentElement = isValid ? cached.element : null;
 
           // 消费后清空缓存，防止下次误用
-          lastContextMenuSelection = { text: '', context: '', at: 0 };
+          lastContextMenuSelection = { text: '', context: '', element: null, at: 0 };
 
-          // 异步添加到记忆列表
-          addToMemorizeList({ original: word }, context).then(() => {
+          // 只翻译并显示，不添加到记忆列表
+          translateAndShow(word, parentElement, context).then(() => {
             sendResponse({ success: true });
           }).catch(error => {
-            console.error('[VocabMeld] Error adding to memorize list:', error);
+            console.error('[VocabMeld] Error translating:', error);
             sendResponse({ success: false, error: error.message });
           });
           return true;

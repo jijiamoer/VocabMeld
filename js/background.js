@@ -1,6 +1,6 @@
 /**
  * VocabMeld 后台脚本
- * 处理扩展级别的事件和消息
+ * 处理扩展级别的事件和消息（含右键“翻译文本”菜单与消息路由）
  * 
  * @input  chrome.storage（配置）、content.js/popup.js/options.js 消息
  * @output API 响应、TTS 语音、存储操作结果
@@ -91,8 +91,8 @@ chrome.runtime.onInstalled.addListener((details) => {
 function createContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id: 'vocabmeld-add-memorize',
-      title: '添加到需记忆列表',
+      id: 'vocabmeld-translate-selection',
+      title: '翻译文本："%s"',
       contexts: ['selection']
     });
 
@@ -106,33 +106,16 @@ function createContextMenus() {
 
 // 右键菜单点击处理
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === 'vocabmeld-add-memorize' && info.selectionText) {
+  if (info.menuItemId === 'vocabmeld-translate-selection' && info.selectionText) {
     const word = info.selectionText.trim();
     if (word && word.length < 50) {
-      // 发送消息给 content script，让它获取上下文并处理
-      // 这样可以避免 background 和 content 同时写 storage 导致的并发冲突
+      // 发送消息给 content script，让它获取上下文并翻译并显示
       chrome.tabs.sendMessage(tab.id, {
-        action: 'addToMemorizeListWithContext',
+        action: 'translateSelectionWithContext',
         word: word
       }).catch(err => {
-        // Content script 未就绪时，直接写入 storage（降级处理）
-        console.log('[VocabMeld] Content script not ready, adding directly to storage');
-        chrome.storage.local.get('memorizeList', (result) => {
-          const list = result.memorizeList || [];
-          const lowerWord = word.toLowerCase();
-          // 使用 toLowerCase 进行去重比较
-          if (!list.some(w => (w.word || '').toLowerCase() === lowerWord || (w.original || '').toLowerCase() === lowerWord)) {
-            list.push({
-              word: word,
-              original: word,
-              translation: '',
-              phonetic: '',
-              difficulty: 'B1',
-              addedAt: Date.now()
-            });
-            chrome.storage.local.set({ memorizeList: list });
-          }
-        });
+        // Content script 未就绪/页面不允许注入时无法翻译（例如 Chrome Web Store / 内置页面）
+        console.warn('[VocabMeld] Content script not ready, cannot translate selection:', err);
       });
     }
   }
